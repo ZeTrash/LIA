@@ -1,0 +1,14 @@
+# Configuration API - Template
+# Copier ce fichier vers api.conf et remplir avec vos valeurs réelles
+# Ne jamais commiter api.conf dans le dépôt Git
+
+# Clé API Gemini
+gemini_api_key = YOUR_GEMINI_API_KEY_HERE
+
+# Clés API pour le service de simulation (optionnel)
+# openai_api_key = YOUR_OPENAI_API_KEY_HERE
+# anthropic_api_key = YOUR_ANTHROPIC_API_KEY_HERE
+
+# Autres configurations API (à compléter selon besoins)
+# api_base_url = https://api.example.com
+# api_timeout = 30

@@ -1,0 +1,120 @@
+{
+  "context": {
+    "traits": [
+      {
+        "trait_id": "tone",
+        "type": "persona",
+        "label": "Ton",
+        "value": "curieux mais calme",
+        "version": 7,
+        "weight": 0.82,
+        "confidence": 0.84,
+        "origin": "seed",
+        "status": "active",
+        "last_update": "2024-12-07T09:32:00Z"
+      }
+    ],
+    "session_goals": [
+      {
+        "goal_id": "g-482",
+        "session_id": "session-demo",
+        "priority": 0.9,
+        "description": "Préparer un résumé de meeting",
+        "blocking_conditions": [],
+        "expires_at": "2024-12-07T18:00:00Z"
+      }
+    ],
+    "memories": [
+      {
+        "memory_id": "m-9021",
+        "category": "fact",
+        "content": "Alice dirige le pôle Produit depuis 2023.",
+        "tags": ["stakeholders"],
+        "importance_score": 0.76,
+        "recency_score": 0.65,
+        "emotion_score": 0.1,
+        "ttl": "2025-01-21T00:00:00Z",
+        "source": "interaction",
+        "link_refs": [
+          {
+            "type": "trait",
+            "id": "stakeholders"
+          }
+        ],
+        "hash": "4c2f2ef3"
+      }
+    ],
+    "indicators": {
+      "coherence_score": 0.93,
+      "drift_score": 0.12,
+      "drift_alert": false,
+      "latency_context_ms": 148,
+      "coverage_traits_pct": 0.72
+    },
+    "governance_metadata": {
+      "context_version": "2024.12.07-01",
+      "build_time_ms": 148,
+      "trace_id": "mock-trace-id"
+    }
+  },
+  "interaction": {
+    "interaction_id": "i-20241207-001",
+    "session_id": "s-109",
+    "timestamp": "2024-12-07T10:15:00Z",
+    "prompt": "Peux-tu résumer la réunion RH ?",
+    "response": "Résumé concis...",
+    "scores": {
+      "usefulness": 0.87,
+      "coherence": 0.93,
+      "tone": 0.15
+    },
+    "derived_traits": ["tone"],
+    "anomalies": [],
+    "souvenir_created": true
+  },
+  "trait_update": {
+    "trait": {
+      "trait_id": "tone",
+      "type": "persona",
+      "label": "Ton",
+      "value": "curieux mais calme",
+      "version": 8,
+      "weight": 0.84,
+      "confidence": 0.86,
+      "origin": "mock",
+      "status": "active",
+      "last_update": "2024-12-07T10:20:00Z"
+    },
+    "review_required": false,
+    "version_token": "mock-token"
+  },
+  "governance": {
+    "verdict": "allow",
+    "issues": [],
+    "auto_fix": null
+  },
+  "metrics": {
+    "timestamp": "2024-12-07T10:30:00Z",
+    "kpis": {
+      "latency_context_ms": 152,
+      "context_payload_bytes": 5420,
+      "coherence_score": 0.91,
+      "drift_alerts_count": 0,
+      "ttl_purge_rate": 0.12,
+      "store_availability": 0.999
+    },
+    "indicators": {
+      "coherence_score": 0.91,
+      "drift_score": 0.12,
+      "drift_alert": false,
+      "latency_context_ms": 152,
+      "coverage_traits_pct": 0.72
+    },
+    "window": 50,
+    "export_url": "http://127.0.0.1:4600/metrics?format=csv"
+  }
+}
+
+
+
+

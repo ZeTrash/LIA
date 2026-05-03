@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LIA - Chat</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .chat-container {
+            width: 100%;
+            max-width: 900px;
+            height: 90vh;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+
+        .chat-header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #ff4444;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.connected {
+            background: #44ff44;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f8f9fa;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .chat-messages::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .chat-messages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+
+        .chat-messages::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        .message {
+            display: flex;
+            gap: 12px;
+            animation: fadeIn 0.3s ease-in;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            flex-direction: row-reverse;
+        }
+
+        .message-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .message.user .message-avatar {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .message.lia .message-avatar {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 18px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+
+        .message.user .message-content {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.lia {
+            margin-top: 8px;
+        }
+
+        .message.lia .message-content {
+            background: white;
+            color: #212121;
+            border: 1px solid #e0e0e0;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            padding: 14px 16px;
+        }
+
+        /* Formatage markdown dans les messages */
+        .message-content strong {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .message-content em {
+            font-style: italic;
+        }
+
+        .message.lia .message-content strong {
+            color: #667eea;
+        }
+
+        .message.system .message-content {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+            text-align: center;
+            margin: 0 auto;
+            max-width: 90%;
+        }
+
+        .message.thinking .message-content {
+            background: #e3f2fd;
+            color: #1976d2;
+            border: 1px solid #bbdefb;
+            font-style: italic;
+        }
+
+        .message.error .message-content {
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #ffcdd2;
+        }
+
+        /* Styles pour les processus autonomes */
+        .message.process {
+            margin: 12px 0;
+            animation: fadeInUp 0.3s ease-out;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.process .message-content {
+            background: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-left: 4px solid #667eea;
+            padding: 0;
+            border-radius: 8px;
+            max-width: 90%;
+            margin: 0 auto;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .message.process_start .message-content {
+            background: #e3f2fd;
+            border-left-color: #2196f3;
+            font-weight: 600;
+        }
+
+        .message.gemini_query .message-content {
+            background: #fff3e0;
+            border-left-color: #ff9800;
+            margin-left: 20px;
+        }
+
+        .message.gemini_query .message-content::before {
+            content: "❓ Question à Gemini: ";
+            font-weight: 600;
+            color: #ff9800;
+        }
+
+        .message.gemini_response .message-content {
+            background: #e8f5e9;
+            border-left-color: #4caf50;
+            margin-left: 20px;
+        }
+
+        .message.gemini_response .message-content::before {
+            content: "💡 Réponse de Gemini: ";
+            font-weight: 600;
+            color: #4caf50;
+        }
+
+        .message.gemini_error .message-content {
+            background: #ffebee;
+            border-left-color: #f44336;
+            margin-left: 20px;
+        }
+
+        .message.gemini_error .message-content::before {
+            content: "⚠️ Erreur Gemini: ";
+            font-weight: 600;
+            color: #f44336;
+        }
+
+        .message.process_end .message-content {
+            background: #e3f2fd;
+            border-left-color: #2196f3;
+            font-weight: 600;
+        }
+
+        /* Styles pour le streaming */
+        .streaming-cursor {
+            display: inline-block;
+            animation: blink 1s infinite;
+            color: #667eea;
+            font-weight: bold;
+            margin-left: 2px;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+
+        .message[data-streaming="true"] .message-content {
+            min-height: 20px;
+        }
+
+        .process-container {
+            margin: 15px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .process-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            margin: 0;
+            padding: 14px 16px;
+            background: transparent;
+            border-radius: 0;
+            border-left: none;
+            position: relative;
+            transition: background-color 0.2s ease;
+        }
+
+        .process-step:hover {
+            background-color: #f8f9fa;
+        }
+
+        .process-step::before {
+            content: '';
+            position: absolute;
+            left: 24px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #e0e0e0;
+            z-index: 0;
+        }
+
+        .process-step:first-child::before {
+            top: 50%;
+        }
+
+        .process-step:last-child::before {
+            bottom: 50%;
+        }
+
+        .process-step:only-child::before {
+            display: none;
+        }
+
+        .process-step-icon {
+            font-size: 6px;
+            flex-shrink: 0;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #f5f5f5;
+            border-radius: 50%;
+            border: 2px solid #ffffff;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+            position: relative;
+            z-index: 1;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .process-step:hover .process-step-icon {
+            transform: scale(1.05);
+            box-shadow: 0 3px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        .message.process.lia_process .process-step-icon {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .message.process.gemini_query .process-step-icon {
+            background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+        }
+
+        .message.process.gemini_response .process-step-icon {
+            background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+        }
+
+        .message.process.process_start .process-step-icon {
+            background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%);
+        }
+
+        .message.process.process_end .process-step-icon {
+            background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%);
+        }
+
+        .process-step-content {
+            flex: 1;
+            padding-top: 4px;
+        }
+
+        .process-step-title {
+            font-weight: 600;
+            color: #212121;
+            margin-bottom: 6px;
+            font-size: 15px;
+            line-height: 1.4;
+        }
+
+        .process-step-details {
+            color: #616161;
+            font-size: 14px;
+            white-space: pre-wrap;
+            line-height: 1.6;
+            margin: 0;
+        }
+
+        /* Un seul bloc LIA par requête utilisateur: process (LIA/Gemini) + réponse finale */
+        .message.lia.lia-interaction .message-content {
+            background: white;
+            color: #212121;
+            border: 1px solid #e0e0e0;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            padding: 14px 16px;
+        }
+
+        .lia-interaction-steps {
+            padding: 10px 12px;
+            margin: 0 0 12px 0;
+            border-radius: 10px;
+        }
+
+        .lia-interaction-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 6px 0;
+        }
+
+        .lia-interaction-step:not(:last-child) {
+            border-bottom: 1px solid rgba(102, 126, 234, 0.12);
+        }
+
+        .lia-step-badge {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            font-size: 12px;
+            color: white;
+            background: #9ca3af;
+            margin-top: 1px;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+        }
+
+        .lia-step-badge.lia { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .lia-step-badge.gemini_q { background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%); }
+        .lia-step-badge.gemini_r { background: linear-gradient(135deg, #4caf50 0%, #388e3c 100%); }
+        .lia-step-badge.start { background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%); }
+        .lia-step-badge.end { background: linear-gradient(135deg, #10b981 0%, #059669 100%); }
+        .lia-step-badge.err { background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%); }
+
+        .lia-step-text {
+            flex: 1;
+            color: #4b5563;
+            font-weight: 500;
+            font-size: 12px;
+            line-height: 1.45;
+            white-space: pre-wrap;
+        }
+
+        .lia-interaction-response {
+            margin-top: 6px;
+        }
+
+        .lia-answer {
+            color: #212121;
+            font-size: 15px;
+            line-height: 1.7;
+            font-weight: 400;
+            margin-top: 12px;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        /* Bloc pour les extraits directement attribués à Gemini dans la réponse de LIA */
+        .lia-gemini {
+            margin-top: 12px;
+            padding: 10px 12px;
+            background: #e8f5e9;
+            border: 1px solid #c8e6c9;
+            border-left: 4px solid #4caf50;
+            border-radius: 6px;
+            color: #1b5e20;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .message-time {
+            font-size: 11px;
+            color: #999;
+            margin-top: 4px;
+            text-align: right;
+        }
+
+        .message.user .message-time {
+            text-align: left;
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            background: white;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 25px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+
+        .chat-input:focus {
+            border-color: #667eea;
+        }
+
+        .send-button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .send-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 40px;
+            font-size: 16px;
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 12px 16px;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #999;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .typing-dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+            0%, 60%, 100% {
+                transform: translateY(0);
+            }
+            30% {
+                transform: translateY(-10px);
+            }
+        }
+
+        /* Indicateur de réflexion dans le conteneur LIA */
+        .lia-interaction-steps .lia-thinking-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 8px 0;
+            margin-top: 4px;
+            justify-content: flex-start;
+            align-items: center;
+        }
+
+        .lia-interaction-steps .lia-thinking-indicator .typing-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #999;
+            animation: typing 1.4s infinite;
+        }
+
+        @media (max-width: 768px) {
+            .chat-container {
+                height: 100vh;
+                border-radius: 0;
+            }
+
+            .message-content {
+                max-width: 85%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>💬 LIA - Chat</h1>
+            <div class="status-indicator">
+                <div class="status-dot" id="statusDot"></div>
+                <span id="statusText">Connexion...</span>
+            </div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="empty-state">
+                Connectez-vous pour commencer à converser avec LIA...
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <input 
+                type="text" 
+                id="chatInput" 
+                class="chat-input" 
+                placeholder="Tapez votre message..."
+                autocomplete="off"
+            >
+            <button id="sendButton" class="send-button">Envoyer</button>
+        </div>
+    </div>
+
+    <script>
+        // Générer un ID de session unique
+        const sessionId = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
+        let ws = null;
+        let isConnected = false;
+        let thinkingMessageId = null;
+        let currentLiaResponseId = null;
+        let currentGeminiResponseId = null;
+        let currentProcessContainerId = null; // Bloc unique LIA pour une requête utilisateur (process + réponse)
+
+        // Éléments DOM
+        const chatMessages = document.getElementById('chatMessages');
+        const chatInput = document.getElementById('chatInput');
+        const sendButton = document.getElementById('sendButton');
+        const statusDot = document.getElementById('statusDot');
+        const statusText = document.getElementById('statusText');
+
+        // Fonction pour formater l'heure
+        function formatTime(timestamp) {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            return date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        // Fonction pour ajouter un message
+        function addMessage(content, type = 'lia', timestamp = null) {
+            // Supprimer le message "thinking" s'il existe
+            if (thinkingMessageId) {
+                const thinkingMsg = document.getElementById(thinkingMessageId);
+                if (thinkingMsg) {
+                    thinkingMsg.remove();
+                }
+                thinkingMessageId = null;
+            }
+
+            // Supprimer l'état vide s'il existe
+            const emptyState = chatMessages.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            let avatar = '';
+            if (type === 'user') {
+                avatar = '👤';
+            } else if (type === 'lia') {
+                avatar = '🤖';
+            } else if (type === 'system') {
+                avatar = 'ℹ️';
+            } else if (type === 'error') {
+                avatar = '⚠️';
+            }
+
+            const messageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            messageDiv.id = messageId;
+
+            // Formater le contenu selon le type
+            let formattedContent;
+            if (type === 'lia') {
+                // Utiliser formatLiaContent pour le formatage complet
+                formattedContent = formatLiaContent(content);
+                // Debug: vérifier que le formatage a été appliqué
+                if (formattedContent.includes('lia-process')) {
+                    console.log('✅ Formatage processus appliqué');
+                }
+            } else {
+                formattedContent = formatPlainText(content);
+            }
+
+            messageDiv.innerHTML = `
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-content">
+                    ${formattedContent}
+                    ${timestamp ? `<div class="message-time">${formatTime(timestamp)}</div>` : ''}
+                </div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            return messageId;
+        }
+
+        function escapeHtml(text) {
+            return String(text ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        /**
+         * Convertit le markdown léger (**gras**, *italique*) en HTML.
+         * À appeler APRÈS escapeHtml pour éviter les injections.
+         */
+        function formatMarkdown(escapedText) {
+            return String(escapedText ?? '')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+                .replace(/__([^_]+)__/g, '<strong>$1</strong>')
+                .replace(/_([^_]+)_/g, '<em>$1</em>');
+        }
+
+        /**
+         * Mise en forme spécifique pour la description d'environnement de LIA.
+         * Transforme les sections en titres gras + sauts de ligne.
+         */
+        function enhanceEnvironmentText(rawText) {
+            let text = String(rawText ?? '');
+
+            if (!text.includes('Dans mon environnement')) {
+                return text;
+            }
+
+            const labels = [
+                'Accès à Gemini',
+                "Interaction avec l'utilisateur",
+                'Mémoire persistante',
+                'Apprentissage et amélioration continue',
+                'Débat et discussion approfondie'
+            ];
+
+            const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+            labels.forEach((label) => {
+                const pattern = new RegExp(escapeRegex(label) + '\\s*:', 'g');
+                text = text.replace(pattern, `\n\n**${label}** :`);
+            });
+
+            return text;
+        }
+
+        function formatPlainText(text) {
+            const preprocessed = enhanceEnvironmentText(text);
+            const escaped = escapeHtml(preprocessed);
+            const withMarkdown = formatMarkdown(escaped);
+            return withMarkdown.replace(/\r?\n/g, '<br>');
+        }
+
+        function isProcessLine(line) {
+            // Ex: "1) ...", "1. ...", "- ...", "* ..."
+            return /^\s*(\d+[\)\.]|[-*])\s+/.test(line);
+        }
+
+        function isProcessContinuation(line) {
+            // Ex: "(Ensuite, ...)" ou ligne de continuation indentée ou parenthèses
+            const trimmed = line.trim();
+            // Ligne indentée de 2+ espaces OU commence par une parenthèse
+            return /^\s{2,}/.test(line) || /^\(/.test(trimmed);
+        }
+
+        function highlightQuotedSegments(line) {
+            // Met en italique le texte entre guillemets droits: "..."
+            const parts = String(line).split(/"([^"]*)"/g);
+            let out = '';
+            for (let i = 0; i < parts.length; i++) {
+                const chunk = parts[i] ?? '';
+                if (i % 2 === 1) {
+                    out += `<span class="lia-process-quote">"${escapeHtml(chunk)}"</span>`;
+                } else {
+                    out += formatMarkdown(escapeHtml(chunk));
+                }
+            }
+            return out;
+        }
+
+        function formatLiaAnswerWithGeminiSections(text) {
+            const lines = String(text ?? '').split('\n');
+            const blocks = [];
+            let normalBuffer = [];
+            let geminiBuffer = [];
+            let inGemini = false;
+
+            const flushNormal = () => {
+                if (!normalBuffer.length) return;
+                const html = formatPlainText(normalBuffer.join('\n').trimEnd());
+                if (html) {
+                    blocks.push(html);
+                }
+                normalBuffer = [];
+            };
+
+            const flushGemini = () => {
+                if (!geminiBuffer.length) return;
+                // Enlever le préfixe "Gemini:" ou "Réponse de Gemini:" du contenu
+                let content = geminiBuffer.join('\n').trim();
+                content = content.replace(/^\s*(Gemini\s*:|Réponse de Gemini\s*:)\s*/i, '');
+                const html = formatPlainText(content);
+                if (html) {
+                    blocks.push(`<div class="lia-gemini">${html}</div>`);
+                }
+                geminiBuffer = [];
+            };
+
+            for (let idx = 0; idx < lines.length; idx++) {
+                const line = lines[idx] ?? '';
+                const trimmed = line.trim();
+
+                // Détecter le début d'un bloc Gemini (plus flexible)
+                // Patterns: "Gemini:", "Gemini :", "Réponse de Gemini:", ou ligne qui commence par "Gemini" suivi de texte
+                const isGeminiHeader = /^\s*(Gemini\s*:|Réponse de Gemini\s*:)/i.test(line) ||
+                    (trimmed.startsWith('Gemini') && trimmed.length > 10 && idx < lines.length - 1);
+
+                if (isGeminiHeader) {
+                    // On commence un bloc Gemini
+                    flushNormal();
+                    inGemini = true;
+                    geminiBuffer.push(line);
+                    continue;
+                }
+
+                if (inGemini) {
+                    // Ligne vide -> fin du bloc Gemini
+                    if (trimmed === '') {
+                        if (geminiBuffer.length > 0) {
+                            flushGemini();
+                            inGemini = false;
+                        }
+                        continue;
+                    }
+                    
+                    // Si on trouve une ligne qui commence par "LIA:" ou "Utilisateur:", fin du bloc Gemini
+                    if (/^\s*(LIA\s*:|Utilisateur\s*:)/i.test(line)) {
+                        flushGemini();
+                        inGemini = false;
+                        normalBuffer.push(line);
+                        continue;
+                    }
+                    
+                    geminiBuffer.push(line);
+                } else {
+                    normalBuffer.push(line);
+                }
+            }
+
+            // Vider les buffers restants
+            if (inGemini) {
+                flushGemini();
+            } else {
+                flushNormal();
+            }
+
+            return blocks.join('');
+        }
+
+        function formatLiaContent(text) {
+            const raw = String(text ?? '').replace(/\r\n/g, '\n');
+            const lines = raw.split('\n');
+
+            // Détecter les processus (peuvent être sur une seule ligne ou plusieurs)
+            // Pattern pour détecter "1) ...", "2) ...", etc.
+            const processPattern = /\d+[\)\.]\s+/g;
+            const processBlocks = [];
+            const answerLines = [];
+            let inProcessSection = false;
+
+            for (let idx = 0; idx < lines.length; idx++) {
+                const line = lines[idx];
+                const trimmed = line.trim();
+                
+                // Détecter si la ligne contient des processus (peut en contenir plusieurs sur la même ligne)
+                // Ex: "1) Répondre à la question actuelle: 2) Utiliser l'HISTORIQUE récent si utile. 3) Ne pas utiliser MÉMOIRE."
+                const processMatches = [...line.matchAll(processPattern)];
+                
+                if (processMatches.length > 0) {
+                    // La ligne contient au moins un processus
+                    inProcessSection = true;
+                    
+                    // Séparer les processus sur la même ligne
+                    for (let i = 0; i < processMatches.length; i++) {
+                        const match = processMatches[i];
+                        const matchStart = match.index;
+                        const matchEnd = i < processMatches.length - 1 
+                            ? processMatches[i + 1].index 
+                            : line.length;
+                        
+                        let processText = line.substring(matchStart, matchEnd).trim();
+                        // Nettoyer la fin (enlever les espaces et points en fin, mais garder le contenu)
+                        processText = processText.replace(/[\.\s]+$/, '').trim();
+                        
+                        if (processText && processText.length > 3) {
+                            processBlocks.push([processText]);
+                        }
+                    }
+                    
+                    continue;
+                }
+                
+                // Si on est dans une section de processus
+                if (inProcessSection) {
+                    // Ligne vide → fin de la section processus
+                    if (trimmed === '') {
+                        inProcessSection = false;
+                        continue;
+                    }
+                    
+                    // Continuation du processus (ligne indentée ou parenthèses)
+                    if (isProcessContinuation(line)) {
+                        // Ajouter à la dernière boîte de processus
+                        if (processBlocks.length > 0) {
+                            processBlocks[processBlocks.length - 1].push(line);
+                        }
+                        continue;
+                    }
+                    
+                    // Si la ligne commence par une majuscule et est longue, c'est probablement la réponse
+                    // Mais seulement si elle ne ressemble pas à une continuation de processus
+                    if (trimmed.length > 40 && 
+                        /^[A-ZÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞß]/.test(trimmed) &&
+                        !trimmed.match(/^(Je|Tu|Il|Elle|On|Cette|Cette|Lorsque|Si|Quand)/i)) {
+                        inProcessSection = false;
+                        answerLines.push(line);
+                        continue;
+                    }
+                    
+                    // Si la ligne est très courte ou semble être une continuation, l'ajouter au dernier processus
+                    if (trimmed.length < 80) {
+                        if (processBlocks.length > 0) {
+                            processBlocks[processBlocks.length - 1].push(line);
+                        }
+                        continue;
+                    }
+                    
+                    // Sinon, fin de la section processus
+                    inProcessSection = false;
+                    answerLines.push(line);
+                } else {
+                    // Pas de processus, tout est réponse
+                    answerLines.push(line);
+                }
+            }
+
+            // Formater les blocs de processus (chaque processus dans sa propre boîte)
+            const processHtml = processBlocks.length > 0
+                ? processBlocks.map(block => {
+                    const blockText = block
+                        .map(l => {
+                            if (l === '') return '';
+                            return highlightQuotedSegments(l);
+                        })
+                        .filter(l => l !== '')
+                        .join('<br>');
+                    return `<div class="lia-process">${blockText}</div>`;
+                }).join('')
+                : '';
+            
+            const rawAnswer = answerLines.join('\n').trim();
+            const answerHtml = rawAnswer ? formatLiaAnswerWithGeminiSections(rawAnswer) : '';
+
+            // Si pas de processus, retourner juste la réponse formatée
+            if (!processHtml) {
+                return answerHtml || formatPlainText(raw);
+            }
+            
+            // Si pas de réponse après processus, retourner juste les processus
+            if (!answerHtml) {
+                return processHtml;
+            }
+            
+            // Retourner processus + réponse
+            return `${processHtml}${answerHtml}`;
+        }
+
+        // Fonction pour ajouter un indicateur de réflexion
+        function addThinkingIndicator() {
+            if (thinkingMessageId) return;
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message thinking';
+            thinkingMessageId = 'thinking_' + Date.now();
+            messageDiv.id = thinkingMessageId;
+
+            messageDiv.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <div class="typing-indicator">
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                        <div class="typing-dot"></div>
+                    </div>
+                </div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Fonction pour créer un message de streaming
+        function addStreamingMessage(type, timestamp) {
+            // Supprimer le message "thinking" s'il existe
+            if (thinkingMessageId) {
+                const thinkingMsg = document.getElementById(thinkingMessageId);
+                if (thinkingMsg) {
+                    thinkingMsg.remove();
+                }
+                thinkingMessageId = null;
+            }
+
+            // Supprimer l'état vide s'il existe
+            const emptyState = chatMessages.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            // Cas particulier: réponse de LIA -> toujours dans le bloc unique d'interaction
+            if (type === 'lia') {
+                const container = getOrCreateProcessContainer(timestamp);
+                const response = container.querySelector('.lia-interaction-response');
+                if (response) {
+                    response.style.display = 'block';
+                }
+                // Marquer le conteneur comme streaming (réponse finale)
+                container.setAttribute('data-streaming', 'true');
+                return container.id;
+            }
+
+            // Cas particulier: réponse Gemini en streaming -> dans la section "steps" du même bloc
+            if (type === 'gemini_response') {
+                const container = getOrCreateProcessContainer(timestamp);
+                const steps = container.querySelector('.lia-interaction-steps');
+                if (!steps) return null;
+
+                const stepId = 'gemini_stream_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                const stepDiv = document.createElement('div');
+                stepDiv.className = 'lia-interaction-step';
+                stepDiv.id = stepId;
+                stepDiv.setAttribute('data-streaming', 'true');
+                stepDiv.innerHTML = `
+                    <div class="lia-step-badge gemini_r">💡</div>
+                    <div class="lia-step-text">
+                        <span class="streaming-content"></span>
+                        <span class="streaming-cursor">▋</span>
+                    </div>
+                `;
+                steps.appendChild(stepDiv);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                return stepId;
+            }
+
+            // Fallback: comportement standard (message séparé)
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            let avatar = '';
+            if (type === 'lia') {
+                avatar = '🤖';
+            } else if (type === 'gemini_response') {
+                avatar = '💡';
+            }
+
+            const messageId = 'stream_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            messageDiv.id = messageId;
+            messageDiv.setAttribute('data-streaming', 'true');
+
+            messageDiv.innerHTML = `
+                <div class="message-avatar">${avatar}</div>
+                <div class="message-content">
+                    <span class="streaming-content"></span>
+                    <span class="streaming-cursor">▋</span>
+                    ${timestamp ? `<div class="message-time">${formatTime(timestamp)}</div>` : ''}
+                </div>
+            `;
+
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+
+            return messageId;
+        }
+
+        // Fonction pour ajouter un chunk à un message en streaming
+        function appendChunkToMessage(messageId, chunk) {
+            const messageDiv = document.getElementById(messageId);
+            if (!messageDiv) return;
+
+            // Si c'est le bloc LIA d'interaction, viser uniquement la réponse finale
+            const contentSpan = messageDiv.classList.contains('lia-interaction')
+                ? messageDiv.querySelector('.lia-interaction-response .streaming-content')
+                : messageDiv.querySelector('.streaming-content');
+            if (contentSpan) {
+                // Ajouter le chunk au contenu existant
+                const currentContent = contentSpan.textContent || '';
+                const newContent = currentContent + chunk;
+                
+                // Formater le contenu selon le type de message
+                if (messageDiv.classList.contains('lia') && messageDiv.classList.contains('lia-interaction')) {
+                    // Formater en temps réel pour voir les processus apparaître
+                    contentSpan.innerHTML = formatLiaContentStreaming(newContent);
+                } else {
+                    contentSpan.textContent = newContent;
+                }
+                
+                // Scroll automatique
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+            }
+        }
+        
+        // Fonction de formatage optimisée pour le streaming (détecte les processus en temps réel)
+        function formatLiaContentStreaming(text) {
+            // Utiliser la même logique que formatLiaContent mais plus tolérante pour le texte incomplet
+            return formatLiaContent(text);
+        }
+
+        // Fonction pour finaliser un message en streaming
+        function finalizeStreamingMessage(messageId) {
+            const messageDiv = document.getElementById(messageId);
+            if (!messageDiv) return;
+
+            // Retirer l'attribut streaming et le curseur
+            messageDiv.removeAttribute('data-streaming');
+            const cursor = messageDiv.querySelector('.streaming-cursor');
+            if (cursor) {
+                cursor.remove();
+            }
+
+            // Formater le contenu final avec la fonction complète (plus précise)
+            const contentSpan = messageDiv.classList.contains('lia-interaction')
+                ? messageDiv.querySelector('.lia-interaction-response .streaming-content')
+                : messageDiv.querySelector('.streaming-content');
+            if (contentSpan && messageDiv.classList.contains('lia') && messageDiv.classList.contains('lia-interaction')) {
+                const finalContent = contentSpan.textContent || '';
+                // Utiliser formatLiaContent pour le formatage final (plus précis)
+                contentSpan.innerHTML = formatLiaContent(finalContent);
+            }
+        }
+
+        // Bloc unique LIA pour une requête utilisateur (process + gemini + réponse)
+        function getOrCreateProcessContainer(timestamp) {
+            if (currentProcessContainerId) {
+                const container = document.getElementById(currentProcessContainerId);
+                if (container) {
+                    const timeDiv = container.querySelector('.message-time');
+                    if (timestamp && timeDiv && !timeDiv.textContent) {
+                        timeDiv.textContent = formatTime(timestamp);
+                    }
+                    return container;
+                }
+            }
+            // Créer un nouveau conteneur
+            const containerDiv = document.createElement('div');
+            containerDiv.className = 'message lia lia-interaction';
+            currentProcessContainerId = 'process_container_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            containerDiv.id = currentProcessContainerId;
+
+            containerDiv.innerHTML = `
+                <div class="message-avatar">🤖</div>
+                <div class="message-content">
+                    <div class="lia-interaction-steps"></div>
+                    <div class="lia-interaction-response" style="display:none;">
+                        <div class="lia-answer">
+                            <span class="streaming-content"></span>
+                            <span class="streaming-cursor">▋</span>
+                        </div>
+                    </div>
+                    <div class="message-time">${timestamp ? formatTime(timestamp) : ''}</div>
+                </div>
+            `;
+
+            chatMessages.appendChild(containerDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return containerDiv;
+        }
+
+        // Fonction pour fermer le conteneur de processus actuel
+        function closeProcessContainer() {
+            if (currentProcessContainerId) {
+                currentProcessContainerId = null;
+            }
+        }
+
+        // Fonction pour retirer l'indicateur de réflexion du conteneur
+        function removeThinkingIndicatorFromContainer() {
+            if (currentProcessContainerId) {
+                const container = document.getElementById(currentProcessContainerId);
+                if (container) {
+                    const steps = container.querySelector('.lia-interaction-steps');
+                    if (steps) {
+                        const indicator = steps.querySelector('.lia-thinking-indicator');
+                        if (indicator) {
+                            indicator.remove();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fonction pour ajouter l'indicateur de réflexion dans le conteneur
+        function addThinkingIndicatorToContainer() {
+            if (!currentProcessContainerId) return;
+            
+            const container = document.getElementById(currentProcessContainerId);
+            if (!container) return;
+            
+            const steps = container.querySelector('.lia-interaction-steps');
+            if (!steps) return;
+            
+            // Retirer l'indicateur existant s'il y en a un
+            removeThinkingIndicatorFromContainer();
+            
+            // Créer le nouvel indicateur
+            const indicatorDiv = document.createElement('div');
+            indicatorDiv.className = 'lia-thinking-indicator';
+            indicatorDiv.innerHTML = `
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+                <div class="typing-dot"></div>
+            `;
+            
+            steps.appendChild(indicatorDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Fonction pour ajouter un message de processus autonome
+        function addProcessMessage(content, type, timestamp) {
+            // Supprimer le message "thinking" s'il existe
+            if (thinkingMessageId) {
+                const thinkingMsg = document.getElementById(thinkingMessageId);
+                if (thinkingMsg) {
+                    thinkingMsg.remove();
+                }
+                thinkingMessageId = null;
+            }
+
+            // Supprimer l'état vide s'il existe
+            const emptyState = chatMessages.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            // Retirer l'indicateur de réflexion existant avant d'ajouter le nouveau chunk
+            removeThinkingIndicatorFromContainer();
+
+            // Tous les processus (LIA + Gemini) vont dans le même bloc LIA
+            const container = getOrCreateProcessContainer(timestamp);
+            const steps = container.querySelector('.lia-interaction-steps');
+            if (!steps) return null;
+
+            const formattedContent = formatPlainText(content);
+
+            const stepDiv = document.createElement('div');
+            stepDiv.className = 'lia-interaction-step';
+
+            // Badge + couleur par type
+            let badgeClass = 'lia';
+            let badgeIcon = '🧠';
+            if (type === 'process_start') { badgeClass = 'start'; badgeIcon = '🚀'; }
+            else if (type === 'process_end') { badgeClass = 'end'; badgeIcon = '✅'; }
+            else if (type === 'gemini_query') { badgeClass = 'gemini_q'; badgeIcon = '❓'; }
+            else if (type === 'gemini_response') { badgeClass = 'gemini_r'; badgeIcon = '💡'; }
+            else if (type === 'gemini_error') { badgeClass = 'err'; badgeIcon = '⚠️'; }
+            else if (type === 'lia_process') { badgeClass = 'lia'; badgeIcon = '🧠'; }
+
+            stepDiv.innerHTML = `
+                <div class="lia-step-badge ${badgeClass}">${badgeIcon}</div>
+                <div class="lia-step-text">${formattedContent}</div>
+            `;
+
+            steps.appendChild(stepDiv);
+            
+            // Ajouter l'indicateur de réflexion après le chunk
+            addThinkingIndicatorToContainer();
+            
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return container.id;
+        }
+
+        // Fonction pour se connecter
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
+            
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                isConnected = true;
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connecté';
+                chatInput.disabled = false;
+                sendButton.disabled = false;
+            };
+
+            ws.onmessage = (event) => {
+                let data;
+                try {
+                    data = JSON.parse(event.data);
+                } catch (e) {
+                    console.error('Erreur de parsing JSON:', e, 'Raw data:', event.data);
+                    return;
+                }
+                
+                if (!data || typeof data.type === 'undefined') {
+                    console.warn('Message sans type:', data);
+                    return;
+                }
+                
+                switch (data.type) {
+                    case 'system':
+                        addMessage(data.content, 'system', data.timestamp);
+                        break;
+                    
+                    case 'user_message':
+                        // Le message utilisateur est déjà affiché immédiatement dans sendMessage()
+                        // Ne pas le réafficher pour éviter les doublons
+                        break;
+                    
+                    case 'thinking':
+                        addThinkingIndicator();
+                        break;
+                    
+                    case 'process_start':
+                        addProcessMessage(data.content, 'process_start', data.timestamp);
+                        break;
+                    
+                    case 'gemini_query':
+                        addProcessMessage(data.content, 'gemini_query', data.timestamp);
+                        break;
+                    
+                    case 'gemini_response_start':
+                        // Retirer l'indicateur de réflexion avant de commencer la réponse Gemini
+                        removeThinkingIndicatorFromContainer();
+                        // Créer un nouveau message pour la réponse Gemini en streaming
+                        currentGeminiResponseId = addStreamingMessage('gemini_response', data.timestamp);
+                        break;
+                    
+                    case 'gemini_chunk':
+                        // Ajouter le chunk à la réponse Gemini en cours
+                        if (currentGeminiResponseId) {
+                            appendChunkToMessage(currentGeminiResponseId, data.content);
+                        }
+                        break;
+                    
+                    case 'gemini_response_end':
+                        // Finaliser la réponse Gemini
+                        if (currentGeminiResponseId) {
+                            finalizeStreamingMessage(currentGeminiResponseId);
+                            currentGeminiResponseId = null;
+                        }
+                        break;
+                    
+                    case 'gemini_response':
+                        // Mode non-streaming (fallback)
+                        addProcessMessage(data.content, 'gemini_response', data.timestamp);
+                        break;
+                    
+                    case 'gemini_error':
+                        addProcessMessage(data.content, 'gemini_error', data.timestamp);
+                        break;
+                    
+                    case 'process_end':
+                        addProcessMessage(data.content, 'process_end', data.timestamp);
+                        break;
+
+                    case 'lia_process':
+                        // Étapes internes de LIA (menus/décisions) transmises en temps réel
+                        addProcessMessage(data.content, 'lia_process', data.timestamp);
+                        break;
+                    
+                    case 'lia_response_start':
+                        // Retirer l'indicateur de réflexion avant de commencer la réponse finale
+                        removeThinkingIndicatorFromContainer();
+                        // Créer ou réutiliser le bloc pour la réponse LIA en streaming.
+                        // Si un conteneur de processus existe déjà, il sera réutilisé.
+                        currentLiaResponseId = addStreamingMessage('lia', data.timestamp);
+                        break;
+                    
+                    case 'lia_chunk':
+                        // Ajouter le chunk à la réponse LIA en cours
+                        if (currentLiaResponseId) {
+                            appendChunkToMessage(currentLiaResponseId, data.content);
+                        }
+                        break;
+                    
+                    case 'lia_response_end':
+                        // Finaliser la réponse LIA
+                        if (currentLiaResponseId) {
+                            finalizeStreamingMessage(currentLiaResponseId);
+                            currentLiaResponseId = null;
+                        }
+                        // Clore le bloc d'interaction pour cette requête
+                        closeProcessContainer();
+                        break;
+                    
+                    case 'lia_response':
+                        // Mode non-streaming (fallback)
+                        addMessage(data.content, 'lia', data.timestamp);
+                        break;
+                    
+                    case 'error':
+                        addMessage(data.content, 'error', data.timestamp);
+                        break;
+                    
+                    case 'history':
+                        // Historique de la session (pour debug/futur usage)
+                        console.log('Historique reçu:', data.content);
+                        break;
+                    
+                    case 'stats':
+                        // Statistiques (pour debug/futur usage)
+                        console.log('Stats reçues:', data.content);
+                        break;
+                    
+                    default:
+                        console.warn('Message non géré:', {
+                            type: data.type,
+                            fullData: data,
+                            timestamp: data.timestamp
+                        });
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('Erreur WebSocket:', error);
+                statusText.textContent = 'Erreur de connexion';
+                statusDot.classList.remove('connected');
+            };
+
+            ws.onclose = () => {
+                isConnected = false;
+                statusText.textContent = 'Déconnecté';
+                statusDot.classList.remove('connected');
+                chatInput.disabled = true;
+                sendButton.disabled = true;
+                
+                // Tentative de reconnexion après 3 secondes
+                setTimeout(() => {
+                    if (!isConnected) {
+                        connect();
+                    }
+                }, 3000);
+            };
+        }
+
+        // Fonction pour envoyer un message
+        function sendMessage() {
+            const message = chatInput.value.trim();
+            
+            if (!message || !isConnected) {
+                return;
+            }
+
+            // Fermer le conteneur de processus précédent si ouvert
+            closeProcessContainer();
+
+            // Afficher immédiatement le message de l'utilisateur
+            addMessage(message, 'user', new Date().toISOString());
+
+            // Vider le champ de saisie
+            chatInput.value = '';
+            
+            // Ajouter l'indicateur de réflexion
+            addThinkingIndicator();
+
+            // Envoyer via WebSocket
+            ws.send(JSON.stringify({
+                type: 'message',
+                content: message
+            }));
+        }
+
+        // Événements
+        sendButton.addEventListener('click', sendMessage);
+        
+        chatInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Se connecter au chargement
+        connect();
+    </script>
+</body>
+</html>
+
+

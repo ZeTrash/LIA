@@ -1,0 +1,63 @@
+{
+  "session_id": "sim-20251207-521",
+  "started_at": "2025-12-07T11:05:55.796653",
+  "ended_at": "2025-12-07T11:09:49.767359",
+  "agents": [
+    "agent1",
+    "agent2"
+  ],
+  "total_turns": 1,
+  "metrics": {
+    "variability": 1.0,
+    "autonomy": 0.0,
+    "curiosity": 0.0,
+    "coherence": 0.0
+  },
+  "metrics_by_agent": {
+    "agent1": {
+      "variability": 1.0,
+      "autonomy": 1.0,
+      "curiosity": 1.0,
+      "coherence": 0.6499999999999999
+    },
+    "agent2": {
+      "variability": 1.0,
+      "autonomy": 1.0,
+      "curiosity": 1.0,
+      "coherence": 0.6499999999999999
+    }
+  },
+  "messages": [
+    {
+      "message_id": "msg-20251207-b1b",
+      "session_id": "sim-20251207-521",
+      "agent_id": "agent1",
+      "agent_partner_id": "agent2",
+      "timestamp": "2025-12-07T11:09:41.571140",
+      "message_type": "text",
+      "content": "Bonjour, comment allez-vous ?",
+      "metadata": {
+        "turn": 1,
+        "context_used": false
+      }
+    },
+    {
+      "message_id": "msg-20251207-917",
+      "session_id": "sim-20251207-521",
+      "agent_id": "agent2",
+      "agent_partner_id": "agent1",
+      "timestamp": "2025-12-07T11:09:47.724148",
+      "message_type": "text",
+      "content": "[R\u00e9ponse de agent2 \u00e0: Bonjour, comment allez-vous ?...]",
+      "metadata": {
+        "turn": 1,
+        "context_used": false,
+        "governance_verdict": "allow"
+      }
+    }
+  ],
+  "experiences_created": [
+    "exp-sim-sim-20251207-521"
+  ],
+  "traits_updated": []
+}

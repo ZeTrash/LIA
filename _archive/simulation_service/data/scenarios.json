@@ -1,0 +1,25 @@
+{
+  "philosophy": {
+    "name": "Débat philosophique",
+    "description": "Conversation sur des sujets philosophiques profonds",
+    "initial_prompt": "Bonjour, j'aimerais discuter de questions philosophiques. Que penses-tu de la nature de la conscience ?"
+  },
+  "problem-solving": {
+    "name": "Résolution de problème",
+    "description": "Collaboration pour résoudre un problème complexe",
+    "initial_prompt": "Nous avons un problème à résoudre ensemble. Comment devrions-nous procéder ?"
+  },
+  "creative": {
+    "name": "Créativité",
+    "description": "Exploration créative et artistique",
+    "initial_prompt": "Explorons ensemble des idées créatives. Qu'est-ce qui t'inspire ?"
+  },
+  "technical": {
+    "name": "Discussion technique",
+    "description": "Échange sur des sujets techniques et scientifiques",
+    "initial_prompt": "Parlons de technologie et de science. Quel domaine t'intéresse le plus ?"
+  }
+}
+
+
+

@@ -1,0 +1,66 @@
+{
+  "$id": "https://lia.local/schemas/multiagent-handshake.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentHandshake",
+  "type": "object",
+  "required": [
+    "agent_id",
+    "agent_type",
+    "capabilities"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "description": "Identifiant unique de l'agent"
+    },
+    "agent_type": {
+      "type": "string",
+      "enum": ["lia", "lia-primary", "lia-secondary", "llm-external", "simulated"],
+      "description": "Type d'agent"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["memory", "governance", "multi-turn", "streaming"]
+      },
+      "minItems": 1,
+      "description": "Liste des capacités supportées"
+    },
+    "memory_version": {
+      "type": "string",
+      "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9]{2}$",
+      "description": "Version de la mémoire (si applicable)"
+    },
+    "api_endpoint": {
+      "type": "string",
+      "format": "uri",
+      "description": "URL de l'API de l'agent (si externe)"
+    },
+    "auth_token": {
+      "type": "string",
+      "description": "Token d'authentification (si requis)"
+    },
+    "rate_limit": {
+      "type": "object",
+      "properties": {
+        "max_messages_per_second": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10
+        },
+        "max_messages_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 60
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+
+
+
+

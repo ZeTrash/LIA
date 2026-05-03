@@ -1,0 +1,102 @@
+{
+  "$id": "https://lia.local/schemas/multiagent-message.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MultiAgentMessage",
+  "type": "object",
+  "required": [
+    "message_id",
+    "session_id",
+    "agent_id",
+    "agent_partner_id",
+    "timestamp",
+    "message_type",
+    "content"
+  ],
+  "properties": {
+    "message_id": {
+      "type": "string",
+      "pattern": "^msg-[0-9]{8}-[0-9]{3}$",
+      "description": "Identifiant unique du message"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^sim-[0-9]{8}-[0-9]{3}$",
+      "description": "Identifiant de la session de simulation"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "ID de l'agent émetteur"
+    },
+    "agent_partner_id": {
+      "type": "string",
+      "description": "ID de l'agent destinataire"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Horodatage ISO 8601 du message"
+    },
+    "message_type": {
+      "type": "string",
+      "enum": ["text", "handshake", "error", "system"],
+      "description": "Type de message"
+    },
+    "content": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000,
+      "description": "Contenu du message"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "turn": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Numéro du tour dans la conversation"
+        },
+        "context_used": {
+          "type": "boolean",
+          "description": "Indique si le contexte mémoire a été utilisé"
+        },
+        "scores": {
+          "type": "object",
+          "properties": {
+            "coherence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "curiosity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "usefulness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "simulation_type": {
+          "type": "string",
+          "enum": ["multi-agent", "lia-lia", "lia-external", "lia-simulated"],
+          "description": "Type de simulation"
+        },
+        "governance_verdict": {
+          "type": "string",
+          "enum": ["allow", "warn", "block"],
+          "description": "Verdict de la gouvernance sur ce message"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+
+
+
+

@@ -1,0 +1,67 @@
+{
+  "version": "1.1",
+  "last_updated": "2026-02-17T12:49:37.168335+00:00",
+  "patterns": [
+    {
+      "id": "30650295d3a6",
+      "action_sequence": [
+        "consult_patterns",
+        "respond"
+      ],
+      "request_types": [
+        "simple"
+      ],
+      "success_rate": 1.0,
+      "avg_quality_score": 0.6064285714285715,
+      "avg_execution_time": 1.1512211390904018e-05,
+      "usage_count": 7,
+      "last_used": "2026-02-17T11:30:14.139173+00:00"
+    },
+    {
+      "id": "34d5ac5220d8",
+      "action_sequence": [
+        "respond"
+      ],
+      "request_types": [
+        "simple"
+      ],
+      "success_rate": 1.0,
+      "avg_quality_score": 0.6466666666666665,
+      "avg_execution_time": 1.1899254538796164e-05,
+      "usage_count": 22,
+      "last_used": "2026-02-17T12:49:37.168194+00:00"
+    },
+    {
+      "id": "5ad3320d7fff",
+      "action_sequence": [
+        "consult_patterns",
+        "query_external",
+        "respond"
+      ],
+      "request_types": [
+        "moderate"
+      ],
+      "success_rate": 1.0,
+      "avg_quality_score": 0.4525,
+      "avg_execution_time": 6.373712062835693,
+      "usage_count": 1,
+      "last_used": "2026-02-17T09:23:35.822369+00:00"
+    }
+  ],
+  "meta": {
+    "iteration_policy": {
+      "simple": {
+        "history_steps": [
+          1,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "last_updated": "2026-02-17T12:49:37.168108+00:00"
+      }
+    }
+  }
+}

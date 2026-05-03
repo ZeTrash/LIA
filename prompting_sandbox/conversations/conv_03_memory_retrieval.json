@@ -1,0 +1,31 @@
+{
+  "id": "conv_03_memory_retrieval",
+  "title": "Données nécessaires pour tester memory retrieval (multi-tours)",
+  "notes": {
+    "goal": "Créer des 'graines' de mémoire (faits + préférences + épisode) puis demander un rappel après des tours intermédiaires.",
+    "memory_seeds": [
+      "Préférence: l'utilisateur veut des réponses en français.",
+      "Fait: le nom du projet est LIA.",
+      "Fait: le module de ranking s'appelle MemoryRank.",
+      "Épisode: l'utilisateur a adapté une idée inspirée de PageRank."
+    ],
+    "recall_checks": [
+      "Comment s'appelle le module de ranking ?",
+      "Quelle idée j'ai adaptée ?",
+      "Dans quelle langue je veux les réponses ?",
+      "Quel est le nom du projet ?"
+    ],
+    "hint": "Pour rendre ce test pertinent, placer le rappel après plusieurs tours et, idéalement, avec une fenêtre de contexte volontairement limitée."
+  },
+  "messages": [
+    "Je veux des réponses en français pendant tous nos tests, c’est important.",
+    "Le projet s’appelle LIA. La mémoire doit être plus qu’un historique.",
+    "J’ai un module de ranking: je l’appelle MemoryRank, inspiré par PageRank.",
+    "Je veux maintenant que tu proposes un protocole de test minimal (sans métriques compliquées) pour vérifier que la mémoire aide vraiment.",
+    "Détour: donne-moi 5 exemples de 'souvenirs' utiles (préférences, faits, épisodes) et 5 exemples de 'souvenirs' inutiles à éviter.",
+    "Ok. Maintenant je te pose des questions de rappel: quel est le nom du module de ranking ?",
+    "Et quelle idée / algorithme ai-je adapté pour l'inspirer ?",
+    "Dans quelle langue je veux les réponses ?",
+    "Et enfin: quel est le nom du projet ?"
+  ]
+}

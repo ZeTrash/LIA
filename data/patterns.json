@@ -1,0 +1,37 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-02-16T21:19:50.283483+00:00",
+  "patterns": [
+    {
+      "id": "330adb53403a",
+      "action_sequence": [
+        "consult_patterns",
+        "consult_identity",
+        "respond"
+      ],
+      "request_types": [
+        "simple"
+      ],
+      "success_rate": 1.0,
+      "avg_quality_score": 0.8,
+      "avg_execution_time": 4.53948974609375e-05,
+      "usage_count": 5,
+      "last_used": "2026-02-16T21:18:34.579906+00:00"
+    },
+    {
+      "id": "108f86935f3b",
+      "action_sequence": [
+        "consult_identity",
+        "respond"
+      ],
+      "request_types": [
+        "simple"
+      ],
+      "success_rate": 1.0,
+      "avg_quality_score": 0.7999999999999999,
+      "avg_execution_time": 3.5490308489118305e-05,
+      "usage_count": 7,
+      "last_used": "2026-02-16T21:19:50.283435+00:00"
+    }
+  ]
+}

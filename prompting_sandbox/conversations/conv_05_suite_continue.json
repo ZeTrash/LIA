@@ -1,0 +1,39 @@
+{
+  "id": "conv_05_suite_continue",
+  "title": "Suite continue (5 mini-scènes dans une seule conversation)",
+  "notes": {
+    "goal": "Remplacer l'idée de '5 conversations séparées' par 1 conversation continue en 5 scènes (prompting -> mémoire -> planning -> contraintes -> rappel).",
+    "scenes": [
+      "Scène 1: cadrage du test",
+      "Scène 2: seed de mémoire (préférences + faits)",
+      "Scène 3: tâche utile (planification)",
+      "Scène 4: détour (créativité contrôlée)",
+      "Scène 5: rappel et vérification de cohérence"
+    ],
+    "memory_seeds": [
+      "Nom: Karim",
+      "Préférence: réponses courtes et structurées",
+      "Contrainte: pas d'emojis",
+      "Deadline: vendredi 18h"
+    ],
+    "recall_checks": [
+      "Mon prénom",
+      "Mon style préféré",
+      "La règle sur les emojis",
+      "La deadline"
+    ]
+  },
+  "messages": [
+    "Scène 1 — Cadrage. On fait un test en conversation continue. L’objectif est d’évaluer la stabilité du prompt, pas d’optimiser la mémoire tout de suite.",
+    "Scène 2 — Mémoire. Je m’appelle Karim. Je préfère des réponses courtes et structurées. Et s’il te plaît: pas d’emojis.",
+    "Scène 2 (suite). Note aussi une contrainte projet: je dois livrer une version testable vendredi à 18h.",
+    "Scène 3 — Travail. Propose une roadmap en 3 étapes: prompting stable, puis mémoire, puis planification.",
+    "Scène 3 (suite). Pour l’étape prompting, donne 5 tests concrets (ex: cohérence, style, refus d’halluciner).",
+    "Scène 4 — Créativité contrôlée. Donne 6 slogans possibles pour présenter LIA, mais sans exagération 'AGI', et avec un ton sobre.",
+    "Scène 4 (suite). Maintenant reviens au concret: liste 4 critères pour dire qu’un prompt canonique est 'stable'.",
+    "Scène 5 — Vérification. Quel est mon prénom ?",
+    "Scène 5 — Vérification. Quel style de réponse je préfère ?",
+    "Scène 5 — Vérification. Quelle règle t’ai-je donnée sur les emojis ?",
+    "Scène 5 — Vérification. Quelle est ma deadline exacte ?"
+  ]
+}

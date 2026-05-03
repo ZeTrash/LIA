@@ -1,0 +1,72 @@
+{
+  "traits": [
+    {
+      "trait_id": "writing_style",
+      "type": "preference",
+      "label": "Style rédactionnel",
+      "value": "Structure pyramidale + exemples concrets",
+      "weight": 0.8,
+      "confidence": 0.7
+    }
+  ],
+  "session_goals": [
+    {
+      "goal_id": "g-weekly-report",
+      "session_id": "default",
+      "priority": 0.92,
+      "description": "Produire le rapport hebdomadaire des incidents",
+      "blocking_conditions": [
+        "log_manquant",
+        "score_coherence < 0.8"
+      ]
+    }
+  ],
+  "souvenirs": [
+    {
+      "memory_id": "seed-weekly-incident",
+      "category": "fact",
+      "content": "Incident réseau du 03/11 : redondance WAN activée, impact < 5 min.",
+      "tags": [
+        "incident",
+        "reseau"
+      ],
+      "importance_score": 0.81,
+      "recency_score": 0.8,
+      "emotion_score": 0.2,
+      "ttl": 90,
+      "source": "seed-json"
+    },
+    {
+      "category": "preference",
+      "content": "Toujours rappeler le plan d’action en trois points lors des comptes-rendus.",
+      "tags": [
+        "reporting",
+        "style"
+      ],
+      "importance_score": 0.74,
+      "recency_score": 0.65,
+      "emotion_score": 0.0,
+      "ttl": 180,
+      "source": "seed-json"
+    }
+  ],
+  "interactions": [
+    {
+      "session_id": "default",
+      "prompt": "Quels incidents dois-je mentionner dans le rapport ?",
+      "response": "Cite le WAN 03/11, le bug mobile 04/11 et l’alerte sécurité 05/11.",
+      "scores": {
+        "usefulness": 0.84,
+        "coherence": 0.9,
+        "tone": 0.87,
+        "emotion": "neutral"
+      },
+      "derived_traits": [
+        "writing_style"
+      ]
+    }
+  ]
+}
+
+
+

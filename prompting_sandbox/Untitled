@@ -1,0 +1,33 @@
+{
+  "core": {
+    "max_length": 
+    {"value" : 15360 ,
+    "description" : "Cette valeur reprensente, modifie le selon ton besoin pour Tu peux supporter jusqu'à 32K tokens"
+  }
+    
+    temperature: float = 0.8  "Cette valeur selon sa valeur favorise la créativité ou la logique pure, modifie selon ton besoin"
+    top_p: float = 0.95  "Selon la valeur donne de diversité dans les réponses"
+    top_k: int = 50  ""
+    repetition_penalty: float = 1.2  # ""
+  },
+
+  "task": {
+    "user_request": "...",
+    "goal": "produce the most coherent response"
+  },
+
+  "memory": {
+    "relevant_memories": []
+  },
+
+  "operations": [
+    "recalibrate_parameters",
+    "retrieve_information",
+    "search_external",
+    "generate_response"
+  ],
+
+  "output_format": {
+    "type": "json"
+  }
+}

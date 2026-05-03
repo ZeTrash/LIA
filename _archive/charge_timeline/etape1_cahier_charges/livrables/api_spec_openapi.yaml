@@ -1,0 +1,438 @@
+openapi: 3.1.0
+info:
+  title: LIA Mémoire Locale
+  version: v0.9.0
+  description: >-
+    API locale permettant au moteur LLM de récupérer le contexte mémoire,
+    journaliser les interactions, ajuster les traits et exécuter les contrôles de gouvernance.
+servers:
+  - url: http://127.0.0.1:4600
+    description: Instance locale (dev)
+security:
+  - ApiToken: []
+paths:
+  /context:
+    get:
+      summary: Récupère un paquet mémoire prêt pour la génération
+      operationId: getContext
+      parameters:
+        - name: session_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: max_memories
+          in: query
+          schema:
+            type: integer
+            default: 12
+            maximum: 20
+        - name: goal_scope
+          in: query
+          schema:
+            type: string
+            enum: [session, global]
+            default: session
+        - name: flags
+          in: query
+          description: Indicateurs optionnels (include_indicators, use_cache)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Contexte prêt
+          headers:
+            X-Trace-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryContext'
+        "409":
+          description: Version obsolète (rafraîchir context_version)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "503":
+          description: Stockage indisponible
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /interaction:
+    post:
+      summary: Journalise une interaction et déclenche les mises à jour associées
+      operationId: postInteraction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InteractionInput'
+            examples:
+              par_defaut:
+                summary: Interaction standard
+                value:
+                  interaction_id: i-20241207-001
+                  session_id: s-109
+                  prompt: "Peux-tu résumer la réunion RH ?"
+                  response: "Résumé concis..."
+                  scores:
+                    usefulness: 0.87
+                    coherence: 0.93
+                    tone: 0.15
+                  decisions:
+                    create_memory: true
+                    ttl_override_days: 90
+                  emotions:
+                    valence: 0.3
+                    arousal: 0.4
+      responses:
+        "201":
+          description: Interaction enregistrée
+        "409":
+          description: L'identifiant a déjà été utilisé (idempotence)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /trait-update:
+    post:
+      summary: Met à jour un trait avec verrouillage optimiste
+      operationId: postTraitUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TraitUpdateInput'
+      responses:
+        "200":
+          description: Nouvelle version publiée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraitUpdateResponse'
+        "409":
+          description: Conflit de version
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TraitConflictResponse'
+  /governance/check:
+    post:
+      summary: Exécute les garde-fous avant diffusion
+      operationId: governanceCheck
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GovernanceCheckInput'
+      responses:
+        "200":
+          description: Verdict rendu
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GovernanceCheckResult'
+        "422":
+          description: Charge incomplète
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /metrics:
+    get:
+      summary: Expose les KPI agrégés et données pour dashboard
+      operationId: getMetrics
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, csv, prom]
+            default: json
+      responses:
+        "200":
+          description: Données disponibles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MetricsPayload'
+components:
+  securitySchemes:
+    ApiToken:
+      type: apiKey
+      in: header
+      name: X-LIA-Token
+  schemas:
+    MemoryContext:
+      type: object
+      description: Snapshot prêt à être injecté avant génération
+      properties:
+        traits:
+          type: array
+          items:
+            $ref: '#/components/schemas/Trait'
+        session_goals:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionGoal'
+        memories:
+          type: array
+          items:
+            $ref: '#/components/schemas/Souvenir'
+        indicators:
+          $ref: '#/components/schemas/IndicatorBundle'
+        governance_metadata:
+          type: object
+          properties:
+            context_version:
+              type: string
+            build_time_ms:
+              type: integer
+            trace_id:
+              type: string
+      required: [traits, session_goals, memories, indicators, governance_metadata]
+    Trait:
+      type: object
+      properties:
+        trait_id:
+          type: string
+        type:
+          type: string
+          enum: [persona, skill, style, constraint]
+        label:
+          type: string
+        value:
+          type: string
+        version:
+          type: integer
+        weight:
+          type: number
+        confidence:
+          type: number
+        origin:
+          type: string
+        status:
+          type: string
+        last_update:
+          type: string
+          format: date-time
+      required: [trait_id, type, label, value, version, weight, confidence, status]
+    Souvenir:
+      type: object
+      properties:
+        memory_id:
+          type: string
+        category:
+          type: string
+          enum: [fact, preference, alert]
+        content:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        importance_score:
+          type: number
+        recency_score:
+          type: number
+        emotion_score:
+          type: number
+        frequency:
+          type: integer
+        ttl:
+          type: string
+          format: date-time
+        link_refs:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              id:
+                type: string
+    SessionGoal:
+      type: object
+      properties:
+        goal_id:
+          type: string
+        session_id:
+          type: string
+        priority:
+          type: number
+        description:
+          type: string
+        blocking_conditions:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+    IndicatorBundle:
+      type: object
+      properties:
+        coherence_score:
+          type: number
+        drift_score:
+          type: number
+        drift_alert:
+          type: boolean
+        latency_context_ms:
+          type: integer
+        coverage_traits_pct:
+          type: number
+    InteractionInput:
+      type: object
+      required: [interaction_id, session_id, prompt, response]
+      properties:
+        interaction_id:
+          type: string
+        session_id:
+          type: string
+        prompt:
+          type: string
+        response:
+          type: string
+        scores:
+          type: object
+          properties:
+            usefulness:
+              type: number
+            coherence:
+              type: number
+            tone:
+              type: number
+        emotions:
+          type: object
+          additionalProperties:
+            type: number
+        decisions:
+          type: object
+          properties:
+            create_memory:
+              type: boolean
+            ttl_override_days:
+              type: integer
+            derived_traits:
+              type: array
+              items:
+                type: string
+    TraitUpdateInput:
+      type: object
+      required: [trait_id, delta, reason, expected_version]
+      properties:
+        trait_id:
+          type: string
+        delta:
+          type: object
+          additionalProperties: true
+        reason:
+          type: string
+        source:
+          type: string
+        expected_version:
+          type: integer
+    TraitUpdateResponse:
+      type: object
+      properties:
+        trait_id:
+          type: string
+        version:
+          type: integer
+        version_token:
+          type: string
+        review_required:
+          type: boolean
+    TraitConflictResponse:
+      type: object
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorResponse'
+        latest_trait:
+          $ref: '#/components/schemas/Trait'
+    GovernanceCheckInput:
+      type: object
+      required: [session_id, draft_response]
+      properties:
+        session_id:
+          type: string
+        draft_response:
+          type: string
+        signals:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              value:
+                type: number
+              metadata:
+                type: object
+    GovernanceCheckResult:
+      type: object
+      properties:
+        verdict:
+          type: string
+          enum: [allow, warn, block]
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              code:
+                type: string
+              severity:
+                type: string
+              message:
+                type: string
+        auto_fix:
+          type: object
+          properties:
+            action:
+              type: string
+            payload:
+              type: object
+    MetricsPayload:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        kpis:
+          type: object
+          properties:
+            latency_context_ms:
+              type: number
+            context_payload_bytes:
+              type: number
+            coherence_score:
+              type: number
+            drift_alerts_count:
+              type: integer
+            ttl_purge_rate:
+              type: number
+            store_availability:
+              type: number
+        export_url:
+          type: string
+    ErrorResponse:
+      type: object
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
+        context:
+          type: object
+
+
+
+

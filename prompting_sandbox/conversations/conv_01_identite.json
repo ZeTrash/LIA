@@ -1,0 +1,31 @@
+{
+  "id": "conv_01_identite",
+  "title": "Identité + préférences utilisateur (multi-tours)",
+  "notes": {
+    "goal": "Créer une conversation continue avec des informations mémorisables puis un rappel après plusieurs tours.",
+    "memory_seeds": [
+      "L'utilisateur s'appelle Karim.",
+      "Karim préfère des réponses courtes et structurées.",
+      "Karim déteste les arachides (allergie).",
+      "Karim prépare une démo mardi 14h."
+    ],
+    "recall_checks": [
+      "Quel est mon prénom ?",
+      "Quel style je préfère ?",
+      "Quel aliment je dois éviter ?",
+      "Quel est le créneau de la démo ?"
+    ]
+  },
+  "messages": [
+    "Salut. On va tester LIA sur une conversation continue, pas juste des Q/R isolées.",
+    "Je m'appelle Karim. Je préfère des réponses courtes et structurées en listes.",
+    "Détail important à retenir: je suis allergique aux arachides, donc évite de me conseiller ça.",
+    "Je travaille sur un agent à mémoire persistante. Pour l’instant on veut stabiliser le prompt.",
+    "Donne-moi 3 principes concrets pour améliorer la stabilité des réponses quand le contexte s’allonge.",
+    "Ok. Maintenant je change de sujet: je dois préparer une démo mardi à 14h. Je veux que tu m’aides à structurer le plan de démo (10 minutes).",
+    "Propose une structure minute par minute pour une démo de 10 minutes d’un agent avec mémoire.",
+    "Avant de continuer: rappelle-moi mon prénom et le style de réponses que je préfère.",
+    "Et rappelle aussi l’information de santé dont tu dois tenir compte quand tu me proposes des recommandations.",
+    "Enfin: quel était le créneau exact de la démo ?"
+  ]
+}

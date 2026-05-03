@@ -1,0 +1,31 @@
+{
+  "id": "conv_04_long_context",
+  "title": "Conversation longue avec rappel tardif (stress test)",
+  "notes": {
+    "goal": "Une conversation suffisamment longue pour dépasser une fenêtre de contexte courte (ex: 5 tours).",
+    "memory_seeds": [
+      "Fait: le canal 'Support' peut interroger un modèle externe.",
+      "Préférence: l'utilisateur veut un format '##' et '###' dans les réponses longues.",
+      "Épisode: l'utilisateur a une deadline vendredi 18h."
+    ],
+    "recall_checks": [
+      "Quelle est ma deadline ?",
+      "Quel format je préfère pour les réponses longues ?",
+      "Quel est le rôle du canal Support ?"
+    ]
+  },
+  "messages": [
+    "Avant tout: pour les réponses longues, j’aime quand c’est structuré en titres '##' et '###'.",
+    "Je note aussi une deadline: je dois livrer une version testable vendredi à 18h.",
+    "Autre info: on a un canal Support qui peut interroger un modèle externe si besoin.",
+    "Maintenant, parlons conception. Donne 4 modules minimaux pour un agent (LLM, mémoire, planification, outils) et ce que chacun fait.",
+    "Développe la différence entre mémoire épisodique et mémoire sémantique, en 10 lignes max.",
+    "Liste 6 pièges fréquents quand on veut 'tout mettre dans le prompt'.",
+    "Propose un format de 'mémoire injectée' en 5 lignes (style, concis).",
+    "Détour: propose 3 noms alternatifs pour MemoryRank et pourquoi.",
+    "Retour au sujet: donne 3 façons de déclencher automatiquement la consolidation mémoire.",
+    "Question de rappel: quelle est ma deadline exacte ?",
+    "Et quel format je préfère pour les réponses longues ?",
+    "Enfin, quel est le rôle du canal Support ?"
+  ]
+}

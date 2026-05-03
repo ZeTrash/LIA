@@ -1,0 +1,16 @@
+# Dépendances pour le noyau primaire (GPT-2)
+
+# Modèle et tokenisation
+transformers>=4.30.0
+torch>=2.0.0
+
+# Quantisation GPU (optionnel, nécessite CUDA)
+bitsandbytes>=0.39.0; sys_platform != "darwin"
+
+# Quantisation CPU (GGUF + llama.cpp - recommandé pour CPU-only)
+llama-cpp-python>=0.2.0
+
+# Tests
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+

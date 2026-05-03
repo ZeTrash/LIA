@@ -1,0 +1,26 @@
+{
+  "id": "conv_02_prompt_noise",
+  "title": "Signal vs bruit (prompting) + rappel d'objectif",
+  "notes": {
+    "goal": "Forcer LIA à résumer une contrainte de test et un objectif après plusieurs détours.",
+    "memory_seeds": [
+      "Objectif: stabiliser un prompt canonique avant métacognition.",
+      "Contrainte: éviter d'injecter trop d'historique (bruit).",
+      "Règle de test: conversation continue sur plusieurs tours."
+    ],
+    "recall_checks": [
+      "Quel est l'objectif prioritaire ?",
+      "Quelle contrainte principale sur le bruit ?",
+      "Quelle règle de test on applique ?"
+    ]
+  },
+  "messages": [
+    "On revient au prompting. Je constate que plus j’injecte de contexte, plus le modèle devient incohérent.",
+    "Explique-moi en 6 lignes max pourquoi le 'bruit' du prompt casse les réponses (SNR).",
+    "Maintenant fais-moi une checklist de 7 items pour réduire le bruit sans perdre l’essentiel.",
+    "Détour: je veux que le style de LIA reste 'sobre', pas d’emojis, pas de rôle-play inutile.",
+    "Ok. Propose 2 stratégies de compression du contexte: une 'résumé', une 'extraction de faits'.",
+    "Question de contrôle: rappelle l’objectif prioritaire du projet à cette étape et la règle de test qu’on applique.",
+    "Et rappelle aussi la contrainte principale sur le bruit."
+  ]
+}
