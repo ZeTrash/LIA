@@ -225,11 +225,25 @@ class UserChannel:
                 if not process_callback:
                     return
                 try:
-                    chunk_dict = {
-                        "type": getattr(chunk_obj, "type", None).value if getattr(chunk_obj, "type", None) else None,
-                        "content": getattr(chunk_obj, "content", ""),
-                        "metadata": getattr(chunk_obj, "metadata", {}) or {},
-                    }
+                    if isinstance(chunk_obj, dict):
+                        # Some core paths emit already-serialized chunk dicts.
+                        chunk_type = chunk_obj.get("type")
+                        if hasattr(chunk_type, "value"):
+                            chunk_type = chunk_type.value
+                        chunk_dict = {
+                            "type": chunk_type,
+                            "content": chunk_obj.get("content", ""),
+                            "metadata": chunk_obj.get("metadata", {}) or {},
+                        }
+                    else:
+                        chunk_type = getattr(chunk_obj, "type", None)
+                        if hasattr(chunk_type, "value"):
+                            chunk_type = chunk_type.value
+                        chunk_dict = {
+                            "type": chunk_type,
+                            "content": getattr(chunk_obj, "content", ""),
+                            "metadata": getattr(chunk_obj, "metadata", {}) or {},
+                        }
                     await process_callback(chunk_dict)
                 except Exception as cb_err:
                     logger.debug(f"Erreur process_callback (user_channel): {cb_err}")

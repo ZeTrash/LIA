@@ -1,9 +1,12 @@
 """Adapter pour modèles LLM locaux (noyau primaire)."""
 
 import asyncio
+import json
 import logging
 import os
 import re
+import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, Optional, AsyncIterator, Callable, Awaitable, List, TYPE_CHECKING
 
@@ -32,6 +35,26 @@ PATTERN_ACTIONS_CATALOG: Dict[str, str] = {
     "G5": "Répondre à la requête de l'utilisateur.",
     "G6": "Revenir au menu précédent.",
 }
+
+try:
+    from .neural_router import NeuralRouter
+    NEURAL_ROUTER_AVAILABLE = True
+except ImportError:
+    NEURAL_ROUTER_AVAILABLE = False
+
+try:
+    from .code_brain import CodeBrain
+    CODE_BRAIN_AVAILABLE = True
+except ImportError:
+    CODE_BRAIN_AVAILABLE = False
+
+try:
+    from .architecture_graph import ArchitectureGraph, SelfModification
+    from .self_coding_sandbox import SelfCodingSandbox
+    from .self_improvement_evaluator import SelfImprovementEvaluator, BenchmarkResult
+    SELF_IMPROVEMENT_AVAILABLE = True
+except ImportError:
+    SELF_IMPROVEMENT_AVAILABLE = False
 
 if TYPE_CHECKING:
     # Pour les annotations de type sans import circulaire
@@ -127,6 +150,8 @@ class LLMAdapter:
     _tokenizer_cache = None
     _use_gguf = False  # Flag pour indiquer si on utilise GGUF
     _model_name_cache = None  # Nom du modèle en cache pour affichage
+    _backend_cache = None  # Backend du modèle en cache: gguf|transformers|vllm
+    _cache_key = None
     
     def __init__(
         self, 
@@ -153,7 +178,16 @@ class LLMAdapter:
         self.config = config or CoreConfig()
         self.model = None
         self.tokenizer = None
+        self.backend_type = "unknown"
         self.device = self._detect_device()
+        self.neural_router = None
+        self.router_brain_model = None
+        self.code_brain = None
+        self.architecture_graph = None
+        self.self_coding_sandbox = None
+        self.self_improvement_evaluator = None
+        self.self_modifications_count = 0
+        self._pending_self_mod: Optional[Dict[str, str]] = None
         # Dernière trace structurée (processus + réponse), pour interfaces avancées
         self._last_trace_chunks: List["ResponseChunk"] = []
         
@@ -182,7 +216,49 @@ class LLMAdapter:
                         logger.warning(f"⚠️  Impossible d'initialiser PhraseMemoryProcessor: {e}")
             except Exception as e:
                 logger.warning(f"⚠️  Impossible d'initialiser la mémoire: {e}")
-        
+
+        # NeuralRouter (V2) optionnel
+        if getattr(self.config, "enable_neural_router", False):
+            if NEURAL_ROUTER_AVAILABLE:
+                try:
+                    self.neural_router = NeuralRouter()
+                    logger.info("✅ NeuralRouter MVP activé")
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser NeuralRouter: {e}")
+            else:
+                logger.warning("⚠️  NeuralRouter demandé mais module indisponible")
+
+        if getattr(self.config, "enable_code_brain", False):
+            if CODE_BRAIN_AVAILABLE:
+                try:
+                    self.code_brain = CodeBrain(
+                        model_name=self.config.code_model,
+                        dtype=self.config.vllm_dtype,
+                        max_model_len=min(self.config.vllm_max_model_len, 16384),
+                        gpu_memory_utilization=self.config.code_gpu_memory_utilization,
+                        cache_dir=self.config.model_cache_dir,
+                    )
+                    logger.info("✅ CodeBrain MVP activé (%s)", self.config.code_model)
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser CodeBrain: {e}")
+            else:
+                logger.warning("⚠️  CodeBrain demandé mais module indisponible")
+
+        if getattr(self.config, "enable_self_improvement", False):
+            if SELF_IMPROVEMENT_AVAILABLE:
+                try:
+                    self.architecture_graph = ArchitectureGraph.default_v2()
+                    self.self_coding_sandbox = SelfCodingSandbox(
+                        repo_root=str(Path(__file__).resolve().parents[1]),
+                        timeout_seconds=self.config.sandbox_timeout_seconds,
+                    )
+                    self.self_improvement_evaluator = SelfImprovementEvaluator()
+                    logger.info("✅ SelfImprovement MVP activé")
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser SelfImprovement: {e}")
+            else:
+                logger.warning("⚠️  SelfImprovement demandé mais modules indisponibles")
+
         # Extraire gemini_adapter depuis support_channel si nécessaire
         # (pour EnvironmentAwareness qui a besoin de gemini_adapter directement)
         actual_gemini_adapter = gemini_adapter
@@ -295,7 +371,8 @@ class LLMAdapter:
                     "reflection_budget_time": 2.0,
                     "default_interactions_limit": 5,
                     "default_memories_limit": 5,
-                    "default_memory_limit": 5
+                    "default_memory_limit": 5,
+                    "max_tool_calls": int(getattr(self.config, "max_tool_calls", 5) or 5),
                 }
                 
                 self.cognitive_planner = CognitivePlanner(
@@ -395,8 +472,9 @@ class LLMAdapter:
                 # PAS DE FALLBACK - lever l'exception pour voir les erreurs
                 raise RuntimeError(error_msg) from e
         
-        # Charger le modèle si pas en cache
-        if LLMAdapter._model_cache is None:
+        # Charger le modèle si pas en cache (ou si le cache ne correspond pas à la config actuelle)
+        desired_cache_key = self._build_cache_key()
+        if LLMAdapter._model_cache is None or LLMAdapter._cache_key != desired_cache_key:
             self._load_model()
             # Afficher le nom du modèle chargé (pour être sûr qu'il soit visible)
             if LLMAdapter._model_name_cache:
@@ -404,11 +482,250 @@ class LLMAdapter:
         else:
             self.model = LLMAdapter._model_cache
             self.tokenizer = LLMAdapter._tokenizer_cache
+            self.backend_type = LLMAdapter._backend_cache or "transformers"
             # Le flag _use_gguf est déjà défini lors du premier chargement
             # Afficher le nom du modèle depuis le cache
             if LLMAdapter._model_name_cache:
                 logger.info(f"✅ Modèle réutilisé depuis le cache: {LLMAdapter._model_name_cache}")
                 print(f"\n✅ Modèle réutilisé: {LLMAdapter._model_name_cache}\n")
+
+    def _log_system_event(self, event_type: str, session_id: Optional[str], payload: Dict[str, Any]) -> None:
+        """Log structuré JSONL des échanges/processus pour suivi qualité."""
+        try:
+            log_path = Path(getattr(self.config, "system_log_path", "logs/lia_system_events.jsonl"))
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            row = {
+                "ts": datetime.now().isoformat(),
+                "event": event_type,
+                "session_id": session_id,
+                "payload": payload,
+            }
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception as e:
+            logger.debug(f"Log système ignoré: {e}")
+
+    def _looks_like_self_improvement_request(self, message: str) -> bool:
+        text = (message or "").lower()
+        triggers = (
+            "self improve",
+            "self-improve",
+            "auto-amélioration",
+            "auto amelioration",
+            "auto-amelioration",
+            "améliore toi",
+            "ameliore toi",
+            "modifie ton code",
+            "change ton code",
+        )
+        return any(trigger in text for trigger in triggers)
+
+    def _extract_target_module_for_self_improvement(self, message: str) -> str:
+        match = re.search(r"([a-zA-Z0-9_/\-]+\.py)", message or "")
+        if not match:
+            return "core/config.py"
+        return match.group(1).lstrip("./")
+
+    def _is_self_modification_target_allowed(self, target_module: str) -> bool:
+        blocked_prefixes = ("core/cognitive_safeguards.py", "core/self_coding_sandbox.py")
+        if target_module in blocked_prefixes:
+            return False
+        if "identity" in target_module:
+            return False
+        if self.architecture_graph is None:
+            return True
+        module_key = Path(target_module).stem
+        if module_key in self.architecture_graph.modules:
+            return self.architecture_graph.is_module_mutable(module_key)
+        return True
+
+    async def _run_self_improvement_cycle(self, message: str, session_id: Optional[str]) -> str:
+        if not self.code_brain or not self.self_coding_sandbox or not self.self_improvement_evaluator:
+            return "Le mode self-improvement n'est pas prêt: CodeBrain/Sandbox/Evaluator indisponible."
+
+        if self.self_modifications_count >= self.config.max_self_modifications_per_session:
+            return (
+                "Limite de modifications atteinte pour cette session "
+                f"({self.config.max_self_modifications_per_session})."
+            )
+
+        target_module = self._extract_target_module_for_self_improvement(message)
+        if not self._is_self_modification_target_allowed(target_module):
+            return f"Modification refusée par sécurité pour `{target_module}`."
+
+        target_path = Path(__file__).resolve().parents[1] / target_module
+        if not target_path.exists():
+            return f"Module cible introuvable: `{target_module}`."
+
+        current_code = target_path.read_text(encoding="utf-8")
+        prompt = (
+            "Tu es CodeBrain de LIA.\n"
+            "Objectif: proposer une amélioration locale du module cible.\n"
+            "Contraintes:\n"
+            "- Réponds uniquement avec le contenu complet du fichier modifié.\n"
+            "- Conserve les imports nécessaires et la compatibilité.\n"
+            "- Ne modifie pas l'identité/les garde-fous.\n\n"
+            f"Demande utilisateur: {message}\n"
+            f"Fichier cible: {target_module}\n"
+            "Code actuel:\n"
+            f"{current_code}"
+        )
+
+        proposed_code = self.code_brain.generate(
+            prompt,
+            max_tokens=min(4096, self.config.max_length),
+            temperature=0.15,
+            top_p=0.9,
+            top_k=40,
+            repetition_penalty=1.02,
+        ).strip()
+
+        if not proposed_code:
+            return "CodeBrain n'a pas renvoyé de proposition exploitable."
+
+        test_command = ["python", "-m", "pytest", "-q"]
+        before = BenchmarkResult(quality_score=0.0, latency_ms=0.0, tests_passed=0, tests_total=0)
+        try:
+            baseline_result = subprocess.run(
+                test_command,
+                cwd=str(Path(__file__).resolve().parents[1]),
+                capture_output=True,
+                text=True,
+                timeout=self.config.sandbox_timeout_seconds,
+                check=False,
+            )
+            baseline_total = 1
+            baseline_passed = 1 if baseline_result.returncode == 0 else 0
+            before = BenchmarkResult(
+                quality_score=baseline_passed / baseline_total,
+                latency_ms=0.0,
+                tests_passed=baseline_passed,
+                tests_total=baseline_total,
+            )
+        except Exception:
+            # Le baseline est best-effort: on garde des valeurs neutres si indisponible.
+            pass
+
+        sandbox_result, after = self.self_coding_sandbox.benchmark_modification(
+            proposed_code,
+            target_module,
+            test_command=test_command,
+        )
+        self._log_system_event(
+            "self_improvement_sandbox_result",
+            session_id,
+            {
+                "target_module": target_module,
+                "success": sandbox_result.success,
+                "return_code": sandbox_result.return_code,
+                "tests_passed": after.tests_passed,
+                "tests_total": after.tests_total,
+                "latency_ms": after.latency_ms,
+            },
+        )
+        evaluation = self.self_improvement_evaluator.evaluate(before, after)
+        if not evaluation.accepted:
+            return (
+                "Proposition rejetée après sandbox/evaluation: "
+                f"{evaluation.reason}. stderr: {sandbox_result.stderr[:300]}"
+            )
+
+        if self.config.require_human_approval_for_self_mod:
+            self._pending_self_mod = {
+                "target_module": target_module,
+                "proposed_code": proposed_code,
+            }
+            if self.architecture_graph is not None:
+                self.architecture_graph.log_modification(
+                    SelfModification(
+                        target_module=target_module,
+                        summary="proposal_ready_waiting_human_approval",
+                    )
+                )
+            return (
+                "Proposition validée en sandbox et en attente d'approbation humaine.\n"
+                f"- module: {target_module}\n"
+                f"- raison: {evaluation.reason}\n"
+                "Réponds `APPROVE_SELF_MOD` pour appliquer la modification."
+            )
+
+        target_path.write_text(proposed_code, encoding="utf-8")
+        self.self_modifications_count += 1
+        if self.architecture_graph is not None:
+            self.architecture_graph.log_modification(
+                SelfModification(
+                    target_module=target_module,
+                    summary="applied_without_human_approval",
+                )
+            )
+
+        self._log_system_event(
+            "self_improvement_applied",
+            session_id,
+            {"target_module": target_module, "count": self.self_modifications_count},
+        )
+        return f"Auto-amélioration appliquée sur `{target_module}` (MVP)."
+
+    def _apply_pending_self_modification(self, session_id: Optional[str]) -> str:
+        if not self._pending_self_mod:
+            return "Aucune auto-modification en attente."
+        target_module = self._pending_self_mod["target_module"]
+        proposed_code = self._pending_self_mod["proposed_code"]
+        target_path = Path(__file__).resolve().parents[1] / target_module
+        if not target_path.exists():
+            self._pending_self_mod = None
+            return f"Module cible introuvable au moment d'appliquer: `{target_module}`."
+
+        target_path.write_text(proposed_code, encoding="utf-8")
+        self.self_modifications_count += 1
+        self._pending_self_mod = None
+        if self.architecture_graph is not None:
+            self.architecture_graph.log_modification(
+                SelfModification(
+                    target_module=target_module,
+                    summary="applied_after_human_approval",
+                )
+            )
+        self._log_system_event(
+            "self_improvement_applied_after_approval",
+            session_id,
+            {"target_module": target_module, "count": self.self_modifications_count},
+        )
+        return f"Auto-modification approuvée et appliquée sur `{target_module}`."
+
+    def get_pending_self_modification(self) -> Optional[Dict[str, Any]]:
+        if not self._pending_self_mod:
+            return None
+        return {
+            "target_module": self._pending_self_mod.get("target_module"),
+            "has_proposal": bool(self._pending_self_mod.get("proposed_code")),
+        }
+
+    def approve_pending_self_modification(self, session_id: Optional[str] = None) -> str:
+        return self._apply_pending_self_modification(session_id)
+
+    def reject_pending_self_modification(
+        self,
+        reason: str = "rejected by user",
+        session_id: Optional[str] = None,
+    ) -> str:
+        if not self._pending_self_mod:
+            return "Aucune auto-modification en attente."
+        target_module = self._pending_self_mod.get("target_module")
+        self._pending_self_mod = None
+        self._log_system_event(
+            "self_improvement_rejected",
+            session_id,
+            {"target_module": target_module, "reason": reason},
+        )
+        if self.architecture_graph is not None:
+            self.architecture_graph.log_modification(
+                SelfModification(
+                    target_module=target_module or "unknown",
+                    summary=f"rejected:{reason}",
+                )
+            )
+        return f"Auto-modification rejetée pour `{target_module}`."
     
     def _detect_device(self) -> str:
         """Détecte le device (GPU/CPU)."""
@@ -426,6 +743,48 @@ class LLMAdapter:
         except ImportError:
             logger.warning("⚠️  PyTorch non disponible, utilisation du CPU")
             return "cpu"
+
+    def _resolve_backend(self) -> str:
+        """Résout le backend final à utiliser."""
+        requested = (self.config.backend or "auto").lower()
+        if requested in {"gguf", "transformers", "vllm"}:
+            return requested
+        if requested != "auto":
+            logger.warning("Backend inconnu '%s', fallback vers auto", requested)
+        if self.config.use_gguf and (self.device == "cpu" or not self._has_cuda()):
+            return "gguf"
+        return "transformers"
+
+    def _build_cache_key(self) -> str:
+        """Construit une clé de cache modèle basée sur la config active."""
+        backend = self._resolve_backend()
+        if backend == "gguf":
+            return f"gguf::{self.config.gguf_model_path}::{self.config.max_prompt_length}"
+        if backend == "vllm":
+            return (
+                f"vllm::{self.config.lang_model}::{self.config.vllm_dtype}::"
+                f"{self.config.vllm_max_model_len}::{self.config.vllm_gpu_memory_utilization}::"
+                f"{self.config.model_cache_dir}"
+            )
+        return (
+            f"transformers::{self.config.model_name}::{self.config.quantize}::"
+            f"{self.config.quantization_bits}::{self.device}::{self.config.model_cache_dir}"
+        )
+
+    def _get_model_cache_dir(self) -> str:
+        """Retourne et crée le dossier de cache modèle local."""
+        cache_dir = Path(self.config.model_cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return str(cache_dir.resolve())
+
+    def _configure_hf_cache_env(self) -> str:
+        """Configure des variables d'environnement cache pour HF/vLLM."""
+        cache_dir = self._get_model_cache_dir()
+        hub_dir = str(Path(cache_dir) / "hub")
+        os.environ.setdefault("HF_HOME", cache_dir)
+        os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hub_dir)
+        os.environ.setdefault("TRANSFORMERS_CACHE", hub_dir)
+        return cache_dir
     
     def _get_model_path(self) -> str:
         """Détermine le chemin du modèle (local ou nom pour téléchargement)."""
@@ -486,13 +845,13 @@ class LLMAdapter:
     
     def _load_model(self):
         """Charge le modèle LLM avec quantisation optionnelle."""
-        # DÉCISION: CPU → GGUF, GPU → transformers + bitsandbytes
-        should_use_gguf = (
-            self.config.use_gguf and 
-            (self.device == "cpu" or not self._has_cuda())
-        )
-        
-        if should_use_gguf:
+        backend = self._resolve_backend()
+
+        if backend == "vllm":
+            self._load_model_vllm()
+            return
+
+        if backend == "gguf":
             gguf_path = self._find_gguf_model()
             if gguf_path:
                 try:
@@ -524,6 +883,8 @@ class LLMAdapter:
             logger.info("=" * 60)
             logger.info(f"📦 Chargement modèle transformers: {model_name}")
             logger.info(f"   Chemin: {model_path}")
+            cache_dir = self._configure_hf_cache_env()
+            logger.info(f"   Cache: {cache_dir}")
             
             # Quantisation INT4 si activée (uniquement sur GPU)
             if self.config.quantize and self.config.quantization_bits == 4:
@@ -547,7 +908,8 @@ class LLMAdapter:
                             model_path,
                             quantization_config=quantization_config,
                             device_map="auto",
-                            trust_remote_code=True  # Nécessaire pour Qwen
+                            trust_remote_code=True,  # Nécessaire pour Qwen
+                            cache_dir=cache_dir,
                         )
                         logger.info("✅ Quantisation INT4 activée (bitsandbytes)")
                     except ImportError:
@@ -564,7 +926,8 @@ class LLMAdapter:
             # Charger tokenizer
             self.tokenizer = AutoTokenizer.from_pretrained(
                 model_path,
-                trust_remote_code=True  # Nécessaire pour Qwen
+                trust_remote_code=True,  # Nécessaire pour Qwen
+                cache_dir=cache_dir,
             )
             
             # Configurer pad_token si nécessaire
@@ -578,6 +941,9 @@ class LLMAdapter:
             LLMAdapter._model_cache = self.model
             LLMAdapter._tokenizer_cache = self.tokenizer
             LLMAdapter._use_gguf = False
+            LLMAdapter._backend_cache = "transformers"
+            LLMAdapter._cache_key = self._build_cache_key()
+            self.backend_type = "transformers"
             LLMAdapter._model_name_cache = model_name  # Stocker le nom pour réutilisation
             
             quant_info = f"{self.config.quantization_bits} bits" if self.config.quantize else "sans quantisation"
@@ -590,6 +956,76 @@ class LLMAdapter:
                 "transformers et torch sont requis pour LLMAdapter. "
                 "Installez-les avec: pip install transformers torch"
             )
+
+    def _load_model_vllm(self):
+        """Charge un modèle avec vLLM (recommandé pour ROCm/MI300X)."""
+        try:
+            from vllm import LLM
+        except ImportError:
+            raise ImportError(
+                "vLLM est requis pour backend='vllm'. Installez-le avec: pip install vllm"
+            )
+
+        if not self.config.lang_model:
+            raise ValueError("Configuration invalide: 'lang_model' est requis pour backend='vllm'.")
+        model_path = self.config.lang_model
+        model_name = model_path.split("/")[-1] if "/" in model_path else model_path
+        logger.info("=" * 60)
+        logger.info(f"📦 Chargement modèle vLLM: {model_name}")
+        logger.info(f"   Chemin: {model_path}")
+        cache_dir = self._configure_hf_cache_env()
+        logger.info(f"   Cache: {cache_dir}")
+
+        self.model = LLM(
+            model=model_path,
+            dtype=self.config.vllm_dtype,
+            max_model_len=self.config.vllm_max_model_len,
+            gpu_memory_utilization=self.config.vllm_gpu_memory_utilization,
+            trust_remote_code=True,
+            download_dir=cache_dir,
+            hf_overrides={"cache_dir": cache_dir},
+        )
+        self.tokenizer = None
+        self.backend_type = "vllm"
+
+        LLMAdapter._model_cache = self.model
+        LLMAdapter._tokenizer_cache = None
+        LLMAdapter._use_gguf = False
+        LLMAdapter._backend_cache = "vllm"
+        LLMAdapter._cache_key = self._build_cache_key()
+        LLMAdapter._model_name_cache = model_name
+
+        logger.info(f"✅ Modèle vLLM chargé avec succès: {model_name}")
+        logger.info("=" * 60)
+
+    def _ensure_router_brain(self):
+        """Charge à la demande un petit modèle routeur dédié (vLLM)."""
+        if self.router_brain_model is not None:
+            return
+        if not getattr(self.config, "enable_real_brain_routing", False):
+            return
+        if self.backend_type != "vllm":
+            return
+        try:
+            from vllm import LLM
+        except Exception as e:
+            logger.warning(f"⚠️  Router brain indisponible (vLLM): {e}")
+            return
+
+        cache_dir = self._configure_hf_cache_env()
+        try:
+            self.router_brain_model = LLM(
+                model=self.config.router_model,
+                dtype=self.config.vllm_dtype,
+                max_model_len=min(4096, self.config.vllm_max_model_len),
+                gpu_memory_utilization=self.config.router_gpu_memory_utilization,
+                download_dir=cache_dir,
+                hf_overrides={"cache_dir": cache_dir},
+            )
+            logger.info("✅ Router brain chargé: %s", self.config.router_model)
+        except Exception as e:
+            logger.warning(f"⚠️  Impossible de charger router brain: {e}")
+            self.router_brain_model = None
     
     def _has_cuda(self) -> bool:
         """Vérifie si CUDA est disponible."""
@@ -652,6 +1088,9 @@ class LLMAdapter:
         # Cache global
         LLMAdapter._model_cache = self.model
         LLMAdapter._tokenizer_cache = None
+        LLMAdapter._backend_cache = "gguf"
+        LLMAdapter._cache_key = self._build_cache_key()
+        self.backend_type = "gguf"
         LLMAdapter._model_name_cache = model_filename  # Stocker le nom pour réutilisation
         
         logger.info(f"✅ Modèle GGUF chargé avec succès: {model_filename}")
@@ -678,7 +1117,8 @@ class LLMAdapter:
         self.model = AutoModelForCausalLM.from_pretrained(
             model_path,
             trust_remote_code=True,
-            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32
+            torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
+            cache_dir=self._get_model_cache_dir(),
         )
         if self.device != "cuda" or "device_map" not in str(type(self.model)):
             self.model.to(self.device)
@@ -1053,6 +1493,16 @@ class LLMAdapter:
         """
         if not self.model:
             raise RuntimeError("Modèle non chargé")
+        from .cognitive_models import ResponseChunk, ResponseChunkType
+
+        normalized_message = (message or "").strip()
+        if normalized_message == "APPROVE_SELF_MOD":
+            return self._apply_pending_self_modification(session_id)
+        if (
+            getattr(self.config, "enable_self_improvement", False)
+            and self._looks_like_self_improvement_request(message)
+        ):
+            return await self._run_self_improvement_cycle(message, session_id)
         
         # Décider si utiliser le planificateur cognitif
         should_use_planner = (
@@ -1097,9 +1547,13 @@ class LLMAdapter:
         """
         if not self.model:
             raise RuntimeError("Modèle non chargé")
-        use_gguf = self.tokenizer is None
+        use_gguf = self.backend_type == "gguf"
+        use_vllm = self.backend_type == "vllm"
         if use_gguf:
             response = self._generate_gguf(prompt)
+            return self._clean_response(response)
+        if use_vllm:
+            response = self._generate_vllm(prompt)
             return self._clean_response(response)
         import torch
         encoded = self.tokenizer(
@@ -1155,6 +1609,32 @@ class LLMAdapter:
 
         if not self.model:
             raise RuntimeError("Modèle non chargé")
+
+        normalized_message = (message or "").strip()
+        if normalized_message == "APPROVE_SELF_MOD":
+            response = self._apply_pending_self_modification(session_id)
+            self._last_trace_chunks = [
+                ResponseChunk(
+                    type=ResponseChunkType.RESPONSE,
+                    content=response,
+                    metadata={"session_id": session_id or "default", "step": "self_improvement_apply"},
+                )
+            ]
+            return {"response": response, "trace": [{"type": c.type.value, "content": c.content, "metadata": c.metadata or {}} for c in self._last_trace_chunks]}
+
+        if (
+            getattr(self.config, "enable_self_improvement", False)
+            and self._looks_like_self_improvement_request(message)
+        ):
+            response = await self._run_self_improvement_cycle(message, session_id)
+            self._last_trace_chunks = [
+                ResponseChunk(
+                    type=ResponseChunkType.RESPONSE,
+                    content=response,
+                    metadata={"session_id": session_id or "default", "step": "self_improvement_cycle"},
+                )
+            ]
+            return {"response": response, "trace": [{"type": c.type.value, "content": c.content, "metadata": c.metadata or {}} for c in self._last_trace_chunks]}
 
         # Décider si utiliser le planificateur cognitif (même logique que generate)
         should_use_planner = (
@@ -1319,6 +1799,17 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         if session_id is None:
             import uuid
             session_id = str(uuid.uuid4())
+        self._log_system_event(
+            "exchange_start",
+            session_id,
+            {"message": message, "mode": "internal", "backend": self.backend_type},
+        )
+
+        self._log_system_event(
+            "exchange_start",
+            session_id,
+            {"message": message, "mode": "planner", "backend": self.backend_type},
+        )
         
         # Récupérer le contexte depuis la mémoire si disponible et non fourni
         if context is None and self.memory:
@@ -1340,14 +1831,20 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         # Construire le prompt
         prompt = self.build_prompt(message, context)
         
-        # Vérifier si on utilise GGUF
-        use_gguf = (self.tokenizer is None)
+        # Vérifier le backend actif
+        use_gguf = self.backend_type == "gguf"
+        use_vllm = self.backend_type == "vllm"
         
         try:
             full_response = ""
             if use_gguf:
                 # Streaming avec GGUF
                 async for chunk in self._generate_gguf_stream(prompt, stream_callback):
+                    full_response += chunk
+                    yield chunk
+            elif use_vllm:
+                # Streaming avec vLLM
+                async for chunk in self._generate_vllm_stream(prompt, stream_callback):
                     full_response += chunk
                     yield chunk
             else:
@@ -1472,6 +1969,75 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             trace_chunks: List[ResponseChunk] = []
             stop_reason: str = "unknown"
 
+            # V2: NeuralRouter (classification d'intention + plan de dispatch)
+            selected_primary_brain = "lang"
+            if self.neural_router:
+                try:
+                    # LLM-first: on tente d'abord une classification via router_model.
+                    # Fallback: heuristique NeuralRouter si indisponible / faible confiance.
+                    heuristic_intent = self.neural_router.classify_intent(message)
+                    model_label, model_confidence = self._classify_intent_with_router_model_with_confidence(
+                        message
+                    )
+                    min_conf = float(getattr(self.config, "router_min_confidence", 0.6))
+                    used_fallback = True
+                    intent = heuristic_intent
+                    if model_label and model_confidence >= min_conf:
+                        try:
+                            from .neural_router import BrainType
+
+                            mapped = BrainType[model_label]
+                            intent = type(heuristic_intent)(
+                                brain=mapped,
+                                sub_tasks=heuristic_intent.sub_tasks,
+                                priority=heuristic_intent.priority,
+                                multi_brain=True,
+                                required_brains=list({*heuristic_intent.required_brains, mapped}),
+                            )
+                            used_fallback = False
+                        except Exception:
+                            pass
+                    dispatch_plan = self.neural_router.dispatch(intent)
+                    selected_primary_brain = intent.brain.value
+                    execution_results["_neural_router"] = {
+                        "brain": intent.brain.value,
+                        "brain_from_model": model_label,
+                        "model_confidence": model_confidence,
+                        "min_confidence_threshold": min_conf,
+                        "used_pattern_fallback": used_fallback,
+                        "priority": intent.priority,
+                        "multi_brain": intent.multi_brain,
+                        "required_brains": [b.value for b in intent.required_brains],
+                        "parallel_brains": [b.value for b in dispatch_plan.parallel_brains],
+                    }
+                    router_msg = (
+                        f"NeuralRouter: primaire={intent.brain.value}, "
+                        f"parallèle={[b.value for b in dispatch_plan.parallel_brains]}, "
+                        f"source={'router_model' if not used_fallback else 'pattern_fallback'}"
+                    )
+                    logger.info(f"🧠 [NEURAL_ROUTER] {router_msg}")
+                    chunk = ResponseChunk(
+                        type=ResponseChunkType.PROCESS,
+                        content=router_msg,
+                        metadata={"step": "neural_router", "session_id": session_id},
+                    )
+                    trace_chunks.append(chunk)
+                    if process_callback:
+                        await process_callback(
+                            {
+                                "type": "process",
+                                "content": router_msg,
+                                "metadata": {"step": "neural_router", "session_id": session_id},
+                            }
+                        )
+                    self._log_system_event(
+                        "router_decision",
+                        session_id,
+                        execution_results["_neural_router"],
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️  [NEURAL_ROUTER] Erreur de routing ignorée: {e}")
+
             # Bounds:
             # - Hard limit comes from safeguards (anti-loop)
             # - Soft recommendation can be learned by PatternLearner from past executions
@@ -1516,15 +2082,13 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 except Exception:
                     pass
 
-            # V2: Classification du thème (Groq/Gemini) pour filtrer les patterns
+            # V2: Classification locale du thème pour filtrer les patterns
             classified_theme: Optional[str] = None
-            adapter = self.groq_adapter or self.gemini_adapter
-            if adapter and self.memory:
+            if self.memory:
                 try:
                     classified_theme = await self._classify_request_theme(message)
                     if classified_theme:
-                        adapter_name = "Groq" if self.groq_adapter else "Gemini"
-                        logger.info(f"✅ [PATTERNS] Thème classifié ({adapter_name}): {classified_theme}")
+                        logger.info(f"✅ [PATTERNS] Thème classifié (PatternBrain local): {classified_theme}")
                 except Exception as e:
                     logger.debug(f"ℹ️  [PATTERNS] Classification thème ignorée: {e}")
 
@@ -1692,6 +2256,16 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     lines.append(f"{idx}. {desc}")
                 lines.append("")
 
+                # Section priorité sémantique (non bloquante) selon le cerveau primaire choisi.
+                semantic_guidance = self._semantic_decision_guidance(
+                    primary_brain=selected_primary_brain,
+                    menu_actions=menu,
+                )
+                if semantic_guidance:
+                    lines.append("=== PRIORITÉ SÉMANTIQUE ===")
+                    lines.append(semantic_guidance)
+                    lines.append("")
+
                 # Section recommandation (patterns) : suggestion non contraignante
                 if pattern_recommendation and 1 <= int(pattern_recommendation) <= len(menu):
                     lines.append("=== RECOMMANDATION ===")
@@ -1811,7 +2385,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 sans phrases complètes.
                 """
                 # GGUF
-                if self.tokenizer is None:
+                if self.backend_type == "gguf":
                     # IMPORTANT:
                     # - Ne pas inclure " " (espace) dans stop, sinon la sortie devient souvent vide.
                     # - Préférer le mode chat (system/user) si disponible : beaucoup plus fiable
@@ -1898,6 +2472,158 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
 
                 # Planning loop
             planning_start = time.time()
+
+            # --- AUTONOMY MODE (V2): bypass menu loop ---
+            autonomy_mode = str(getattr(self.config, "autonomy_mode", "menu") or "menu").strip().lower()
+            if autonomy_mode in {"auto_with_audit", "full_auto"}:
+                try:
+                    from .query_brain import QueryBrain, QueryBrainInput
+                    from .prompt_brain import PromptBrain, PromptBrainInput
+
+                    qb = QueryBrain(
+                        planner=self.cognitive_planner,
+                        executor=self.action_executor,
+                        autonomy_mode=autonomy_mode,
+                    )
+                    qb_in = QueryBrainInput(
+                        user_message=message,
+                        session_id=session_id,
+                        base_results=execution_results,
+                    )
+
+                    qb_out = await qb.run(qb_in)
+
+                    min_conf = float(getattr(self.config, "autonomy_min_plan_confidence", 0.55) or 0.55)
+                    require_success = bool(getattr(self.config, "autonomy_require_execution_success", True))
+                    max_replans = int(getattr(self.config, "autonomy_max_replans", 1) or 0)
+
+                    if qb_out.plan_confidence < min_conf or (require_success and not getattr(qb_out.execution_result, "success", True)):
+                        # Replan autonome (sans menus fixes) avant fallback.
+                        replans_done = 0
+                        while replans_done < max_replans:
+                            replans_done += 1
+                            qb_out = await qb.replan_safe_minimal(qb_in)
+                            if qb_out.plan_confidence >= min_conf and (not require_success or getattr(qb_out.execution_result, "success", True)):
+                                break
+                        if qb_out.plan_confidence < min_conf:
+                            raise RuntimeError(
+                                f"autonomy plan_confidence too low ({qb_out.plan_confidence:.2f} < {min_conf:.2f})"
+                            )
+                        if require_success and not getattr(qb_out.execution_result, "success", True):
+                            raise RuntimeError("autonomy execution_result.success is false")
+
+                    plan = qb_out.plan
+                    execution_result = qb_out.execution_result
+                    execution_results = dict(execution_result.results or {})
+                    chosen_actions = list(plan.sorted_actions())
+                    stop_reason = qb_out.stop_reason
+
+                    # Trace
+                    actions_seq = " -> ".join([a.type.value for a in plan.sorted_actions()])
+                    msg_auto = f"QueryBrain: exécution autonome (mode={autonomy_mode}), plan={actions_seq}"
+                    logger.info(f"🤖 [QUERY_BRAIN] {msg_auto}")
+                    try:
+                        chunk = ResponseChunk(
+                            type=ResponseChunkType.PROCESS,
+                            content=msg_auto,
+                            metadata={"step": "query_brain", "session_id": session_id},
+                        )
+                        trace_chunks.append(chunk)
+                        if process_callback:
+                            await process_callback(
+                                {
+                                    "type": "process",
+                                    "content": msg_auto,
+                                    "metadata": {"step": "query_brain", "session_id": session_id},
+                                }
+                            )
+                    except Exception:
+                        pass
+
+                    # Ensure RESPOND at end for downstream prompt construction
+                    if not chosen_actions or chosen_actions[-1].type != ActionType.RESPOND:
+                        chosen_actions.append(Action(ActionType.RESPOND, {}, priority=0, required=True))
+
+                    # Normalize priorities like menu loop
+                    normalized_actions: List[Action] = []
+                    pr = 1
+                    for a in chosen_actions:
+                        normalized_actions.append(
+                            Action(a.type, dict(a.parameters or {}), priority=pr, required=a.required)
+                        )
+                        pr += 1
+                    plan = ActionPlan(
+                        actions=normalized_actions,
+                        estimated_cost=getattr(plan, "estimated_cost", 0.0) or 0.0,
+                        confidence=getattr(plan, "confidence", 0.5) or 0.5,
+                    )
+
+                    planning_time = time.time() - planning_start
+                    # PromptBrain: prompt + sampling dynamiques
+                    pb = PromptBrain()
+                    pb_out = pb.build(
+                        PromptBrainInput(
+                            user_message=message,
+                            plan=plan,
+                            execution_result=execution_result,
+                            base_temperature=float(self.config.temperature),
+                            base_top_p=float(self.config.top_p),
+                            base_max_tokens=int(self.config.max_length),
+                            max_prompt_chars=int(getattr(self.config, "max_prompt_length", 32768) * 4),
+                        )
+                    )
+                    execution_results["_prompt_brain"] = {
+                        "temperature": pb_out.sampling.temperature,
+                        "top_p": pb_out.sampling.top_p,
+                        "max_tokens": pb_out.sampling.max_tokens,
+                        "concision_profile": pb_out.concision_profile,
+                        "prompt_confidence": pb_out.prompt_confidence,
+                        "prompt_issues": pb_out.prompt_issues,
+                    }
+                    min_prompt_conf = float(getattr(self.config, "autonomy_prompt_min_confidence", 0.55) or 0.55)
+                    if pb_out.prompt_confidence < min_prompt_conf:
+                        # Rebuild prompt (sans relancer QueryBrain) avant fallback menu.
+                        max_rebuilds = int(getattr(self.config, "autonomy_max_prompt_rebuilds", 1) or 0)
+                        rebuilds_done = 0
+                        while rebuilds_done < max_rebuilds and pb_out.prompt_confidence < min_prompt_conf:
+                            rebuilds_done += 1
+                            # Version plus stricte: prompt plus court, sampling plus déterministe.
+                            pb_out = pb.build(
+                                PromptBrainInput(
+                                    user_message=message,
+                                    plan=plan,
+                                    execution_result=execution_result,
+                                    base_temperature=min(0.25, float(self.config.temperature)),
+                                    base_top_p=min(0.9, float(self.config.top_p)),
+                                    base_max_tokens=min(1024, int(self.config.max_length)),
+                                    max_prompt_chars=int(max(8000, (getattr(self.config, "max_prompt_length", 32768) * 4) // 4)),
+                                )
+                            )
+                            execution_results["_prompt_brain"] = {
+                                "temperature": pb_out.sampling.temperature,
+                                "top_p": pb_out.sampling.top_p,
+                                "max_tokens": pb_out.sampling.max_tokens,
+                                "concision_profile": pb_out.concision_profile,
+                                "prompt_confidence": pb_out.prompt_confidence,
+                                "prompt_issues": pb_out.prompt_issues,
+                                "rebuilt": True,
+                                "rebuild_index": rebuilds_done,
+                            }
+                        if pb_out.prompt_confidence < min_prompt_conf:
+                            raise RuntimeError(
+                                f"prompt_confidence too low after rebuild ({pb_out.prompt_confidence:.2f} < {min_prompt_conf:.2f})"
+                            )
+                    concision_profile = pb_out.concision_profile
+                    # Injecter le prompt final autonome pour la génération plus bas
+                    execution_results["_final_prompt_override"] = pb_out.prompt
+                    execution_time = float(getattr(execution_result, "execution_time", 0.0) or 0.0)
+                    actions_seq = " -> ".join([a.type.value for a in plan.sorted_actions()])
+                    # Désactiver la boucle menu: on a déjà un plan + résultats.
+                    max_iterations = 0
+                except Exception as e:
+                    logger.warning(f"⚠️  [QUERY_BRAIN] Autonomy mode failed, fallback to menu loop: {e}")
+                    autonomy_mode = "menu"
+
             for i in range(1, max_iterations + 1):
                 menu = self.cognitive_planner.build_action_menu(
                     user_message=message,
@@ -2051,14 +2777,10 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
 
                 # 2) Sinon, on consulte le modèle comme avant (menu → choix via LLM)
                 if choice is None:
-                    # Mode "patterns-only": ne jamais consulter le LLM pour choisir un menu.
-                    # Si aucun pattern n'est disponible pour l'étape courante, on applique un fallback sûr.
-                    # Nouveau comportement: activé par défaut, sauf si LIA_PATTERNS_ONLY=0/false/non.
+                    # Mode "patterns-only" (optionnel): ne jamais consulter le LLM pour choisir un menu.
+                    # Désactivé par défaut: le cerveau décisionnel LLM doit rester prioritaire.
                     env_flag = os.getenv("LIA_PATTERNS_ONLY")
-                    if env_flag is None:
-                        patterns_only = True
-                    else:
-                        patterns_only = env_flag.lower() in {"1", "true", "yes", "oui"}
+                    patterns_only = bool(env_flag and env_flag.lower() in {"1", "true", "yes", "oui"})
 
                     if patterns_only:
                         respond_idx = None
@@ -2296,31 +3018,40 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                         except Exception:
                             pass
 
-            if stop_reason == "unknown":
-                stop_reason = "max_iterations_reached"
+            if autonomy_mode == "menu":
+                if stop_reason == "unknown":
+                    stop_reason = "max_iterations_reached"
 
-            # Ensure RESPOND at end for traceability
-            if not chosen_actions or chosen_actions[-1].type != ActionType.RESPOND:
-                chosen_actions.append(Action(ActionType.RESPOND, {}, priority=0, required=True))
+                # Ensure RESPOND at end for traceability
+                if not chosen_actions or chosen_actions[-1].type != ActionType.RESPOND:
+                    chosen_actions.append(Action(ActionType.RESPOND, {}, priority=0, required=True))
 
-            # Normalize priorities in the resulting plan
-            normalized_actions: List[Action] = []
-            pr = 1
-            for a in chosen_actions:
-                normalized_actions.append(Action(a.type, dict(a.parameters or {}), priority=pr, required=a.required))
-                pr += 1
+                # Normalize priorities in the resulting plan
+                normalized_actions: List[Action] = []
+                pr = 1
+                for a in chosen_actions:
+                    normalized_actions.append(Action(a.type, dict(a.parameters or {}), priority=pr, required=a.required))
+                    pr += 1
 
-            plan = ActionPlan(actions=normalized_actions, estimated_cost=0.0, confidence=0.5)
-            planning_time = time.time() - planning_start
+                plan = ActionPlan(actions=normalized_actions, estimated_cost=0.0, confidence=0.5)
+                planning_time = time.time() - planning_start
+                concision_profile = self._concision_profile_from_planned_actions(plan.sorted_actions())
 
-            # ExecutionResult must contain collected results (RESPOND has no result)
-            execution_result = ExecutionResult(results=execution_results, success=True, errors=[], execution_time=0.0)
-            execution_time = 0.0
-            actions_seq = " -> ".join([a.type.value for a in plan.sorted_actions()])
-            logger.info(
-                f"✅ [LLM_ADAPTER] Boucle cognitive terminée: {len(plan.actions)} actions (dont RESPOND), "
-                f"raison={stop_reason}, sequence={actions_seq}"
-            )
+                # ExecutionResult must contain collected results (RESPOND has no result)
+                execution_result = ExecutionResult(results=execution_results, success=True, errors=[], execution_time=0.0)
+                execution_time = 0.0
+                actions_seq = " -> ".join([a.type.value for a in plan.sorted_actions()])
+                logger.info(
+                    f"✅ [LLM_ADAPTER] Boucle cognitive terminée: {len(plan.actions)} actions (dont RESPOND), "
+                    f"raison={stop_reason}, sequence={actions_seq}"
+                )
+            else:
+                # Autonomy mode: keep plan + execution_result built earlier.
+                actions_seq = " -> ".join([a.type.value for a in plan.sorted_actions()])
+                logger.info(
+                    f"✅ [LLM_ADAPTER] Exécution autonome terminée: {len(plan.actions)} actions (dont RESPOND), "
+                    f"raison={stop_reason}, sequence={actions_seq}"
+                )
             if self.safeguards and not DEBUG_MINIMAL_MENU_LOOP:
                 try:
                     status = self.safeguards.get_budget_status(session_id)
@@ -2416,6 +3147,61 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                         context_parts.append("Capacités:")
                         for cap in capabilities:
                             context_parts.append(f"- {cap}")
+                if execution_results.get(ActionType.CONSULT_OBJECTIVES.value):
+                    obj_data = execution_results[ActionType.CONSULT_OBJECTIVES.value]
+                    objectives = []
+                    if isinstance(obj_data, dict):
+                        objectives = obj_data.get("objectives", []) or []
+                    if objectives:
+                        context_parts.append("Objectifs:")
+                        for o in objectives[:10]:
+                            if isinstance(o, dict) and o.get("description"):
+                                context_parts.append(f"- {o.get('description')}")
+                            else:
+                                s = str(o).strip()
+                                if s:
+                                    context_parts.append(f"- {s}")
+                if execution_results.get(ActionType.CONSULT_RECENT_EPISODES.value):
+                    ep_data = execution_results[ActionType.CONSULT_RECENT_EPISODES.value]
+                    episodes = []
+                    if isinstance(ep_data, dict):
+                        episodes = ep_data.get("recent_episodes", []) or []
+                    if episodes:
+                        context_parts.append("Épisodes récents (résumé):")
+                        for e in episodes[:8]:
+                            if isinstance(e, dict):
+                                et = e.get("type")
+                                if et == "interaction":
+                                    p = (e.get("prompt") or "").strip()
+                                    r = (e.get("response") or "").strip()
+                                    if p and r:
+                                        context_parts.append(f"- Interaction: U='{p[:120]}' | LIA='{r[:120]}'")
+                                elif et == "memory":
+                                    c = (e.get("content") or "").strip()
+                                    if c:
+                                        context_parts.append(f"- Mémoire: {c[:180]}")
+                            else:
+                                s = str(e).strip()
+                                if s:
+                                    context_parts.append(f"- {s[:180]}")
+                if execution_results.get(ActionType.SEARCH_BY_EMOTION.value):
+                    em_data = execution_results[ActionType.SEARCH_BY_EMOTION.value]
+                    emotion = None
+                    results = []
+                    if isinstance(em_data, dict):
+                        emotion = em_data.get("emotion")
+                        results = em_data.get("results", []) or []
+                    if results:
+                        context_parts.append(f"Souvenirs liés à l'émotion '{emotion or ''}':")
+                        for m in results[:6]:
+                            if isinstance(m, dict):
+                                c = (m.get("content") or "").strip()
+                                if c:
+                                    context_parts.append(f"- {c[:180]}")
+                            else:
+                                s = str(m).strip()
+                                if s:
+                                    context_parts.append(f"- {s[:180]}")
                 if execution_results.get(ActionType.CONSULT_MEMORY.value):
                     memory_data = execution_results[ActionType.CONSULT_MEMORY.value]
                     memories = memory_data.get("memories", [])
@@ -2434,10 +3220,17 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     ActionType.CONSULT_IDENTITY.value,
                     ActionType.CONSULT_TRAITS.value,
                     ActionType.CONSULT_ENVIRONMENT.value,
+                    ActionType.CONSULT_OBJECTIVES.value,
+                    ActionType.CONSULT_RECENT_EPISODES.value,
+                    ActionType.SEARCH_BY_EMOTION.value,
                     ActionType.CONSULT_MEMORY.value,
                     ActionType.NAVIGATE_GENERAL.value,
                     ActionType.NAVIGATE_BASE.value,
                     "_menu_state",
+                    "_neural_router",
+                    "_theme_pattern",
+                    "_prompt_brain",
+                    "_final_prompt_override",
                 }
                 for k, v in execution_results.items():
                     if k in known_keys:
@@ -2473,6 +3266,25 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 "Ton style par défaut est de répondre à la demande de l'utilisateur en langage naturel, de manière claire et compréhensible."
             )
             final_prompt_parts.append("")
+            # Longueur attendue : pilotée par le plan (pas par re-scraping brut du texte utilisateur).
+            final_prompt_parts.append("=== CONSIGNE DE RÉPONSE (interne) ===")
+            if concision_profile == "extended":
+                final_prompt_parts.append(
+                    "Tu t'appuies sur « INFORMATIONS CONSULTÉES » (dont capacités / environnement si présentes). "
+                    "Si des résultats spécifiques sont présents (Objectifs / Épisodes récents / Souvenirs liés à une émotion), "
+                    "tu dois les citer explicitement (au moins 2 éléments) au lieu de répondre de façon générique. "
+                    "Donne assez de contenu pour que ce soit utile : tu peux structurer avec quelques lignes commençant par un tiret. "
+                    "Termine tes phrases correctement. N'ajoute pas d'encadré méta ni de second ton narratif (« cependant, sachez que »). "
+                    "Ne répète pas cette consigne et ne la résume pas dans ta sortie."
+                )
+            else:
+                final_prompt_parts.append(
+                    "Réponds de façon concise en général : quelques phrases ciblées pour la DEMANDE UTILISATEUR, "
+                    "en citant explicitement les résultats trouvés dans « INFORMATIONS CONSULTÉES » quand ils existent "
+                    "(au moins 1 élément concret). "
+                    "sans préambule vague. N'ajoute pas d'encadré méta. Ne répète pas cette consigne."
+                )
+            final_prompt_parts.append("")
             # Format canonique (définitions), sans imposer le contenu.
             final_prompt_parts.append("=== FORMAT ===")
             final_prompt_parts.append("HISTORIQUE INTERNE : résumé de tes actions internes (contexte).")
@@ -2484,15 +3296,75 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             final_prompt_parts.append("=== SORTIE LIA ===")
             final_prompt_parts.append("")  # laisser une ligne vide pour la génération
 
-            final_prompt = "\n".join(final_prompt_parts)
+            # Autonomy path can inject a final prompt override produced by PromptBrain.
+            final_prompt_override = execution_results.get("_final_prompt_override")
+            if isinstance(final_prompt_override, str) and final_prompt_override.strip():
+                final_prompt = final_prompt_override
+            else:
+                final_prompt = "\n".join(final_prompt_parts)
             logger.info(
                 f"📝 [LLM_ADAPTER] Prompt final pour génération de la réponse:\n{final_prompt}"
             )
 
-            use_gguf = (self.tokenizer is None)
-            if use_gguf:
+            use_gguf = self.backend_type == "gguf"
+            use_vllm = self.backend_type == "vllm"
+            sampling_override = execution_results.get("_prompt_brain") if isinstance(execution_results, dict) else None
+            if not isinstance(sampling_override, dict):
+                sampling_override = None
+            temperature_override = None
+            top_p_override = None
+            max_tokens_override = None
+            try:
+                if sampling_override:
+                    temperature_override = sampling_override.get("temperature")
+                    top_p_override = sampling_override.get("top_p")
+                    max_tokens_override = sampling_override.get("max_tokens")
+            except Exception:
+                temperature_override = None
+                top_p_override = None
+                max_tokens_override = None
+            if selected_primary_brain == "code" and self.code_brain is not None:
+                self._log_system_event(
+                    "brain_selected",
+                    session_id,
+                    {"brain": "code", "model": self.config.code_model},
+                )
+                response = self.code_brain.generate(
+                    final_prompt,
+                    max_tokens=int(max_tokens_override) if isinstance(max_tokens_override, int) else self.config.max_length,
+                    temperature=float(temperature_override) if isinstance(temperature_override, (int, float)) else min(0.4, self.config.temperature),
+                    top_p=float(top_p_override) if isinstance(top_p_override, (int, float)) else self.config.top_p,
+                    top_k=self.config.top_k,
+                    repetition_penalty=self.config.repetition_penalty,
+                )
+                response = self._clean_response(response, message, concision_profile)
+            elif use_gguf:
                 response = self._generate_gguf(final_prompt)
-                response = self._clean_response(response)
+                response = self._clean_response(response, message, concision_profile)
+            elif use_vllm:
+                self._log_system_event(
+                    "brain_selected",
+                    session_id,
+                    {"brain": "lang", "model": self.config.lang_model},
+                )
+                # vLLM supports SamplingParams, so overrides are applied by temporarily adjusting config.
+                # Keep changes local (try/finally).
+                old_temp = self.config.temperature
+                old_top_p = self.config.top_p
+                old_max_len = self.config.max_length
+                try:
+                    if isinstance(temperature_override, (int, float)):
+                        self.config.temperature = float(temperature_override)
+                    if isinstance(top_p_override, (int, float)):
+                        self.config.top_p = float(top_p_override)
+                    if isinstance(max_tokens_override, int):
+                        self.config.max_length = int(max_tokens_override)
+                    response = self._generate_vllm(final_prompt)
+                finally:
+                    self.config.temperature = old_temp
+                    self.config.top_p = old_top_p
+                    self.config.max_length = old_max_len
+                response = self._clean_response(response, message, concision_profile)
             else:
                 import torch
                 if not self.tokenizer:
@@ -2529,7 +3401,15 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
 
                 generated_ids = outputs[0][input_ids.shape[1] :]
                 response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
-                response = self._clean_response(response)
+                response = self._clean_response(response, message, concision_profile)
+
+            # Filet de sécurité production: ne jamais sortir une réponse vide.
+            if not (response or "").strip():
+                logger.warning(
+                    "⚠️  [LLM_ADAPTER] Réponse vide après génération/nettoyage. "
+                    "Activation du fallback de stabilité."
+                )
+                response = self._build_safe_fallback_response(message)
 
             # Ajouter le chunk de réponse finale à la trace
             final_chunk = ResponseChunk(
@@ -2721,11 +3601,32 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             # En mode standard: retourner uniquement la réponse (comportement existant)
             # Les interfaces qui veulent la trace complète pourront utiliser une API dédiée.
             self._last_trace_chunks = trace_chunks  # stocker pour récupération optionnelle
+            self._log_system_event(
+                "exchange_end",
+                session_id,
+                {
+                    "message": message,
+                    "response": response,
+                    "actions": actions_seq,
+                    "stop_reason": stop_reason,
+                    "process_chunks": [c.content for c in trace_chunks if c.type.value == "process"],
+                },
+            )
+            self._log_system_event(
+                "exchange_end",
+                session_id,
+                {"message": message, "response": response, "mode": "internal"},
+            )
             return response
             
         except Exception as e:
             error_msg = f"❌ ERREUR CRITIQUE dans le planificateur cognitif: {e}"
             logger.error(error_msg, exc_info=True)
+            self._log_system_event(
+                "exchange_error",
+                session_id,
+                {"message": message, "error": str(e), "mode": "planner"},
+            )
             # PAS DE FALLBACK - lever l'exception pour voir les erreurs
             raise RuntimeError(error_msg) from e
     
@@ -2753,8 +3654,9 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         if not self.model:
             raise RuntimeError("Modèle non chargé")
         
-        # Vérifier si on utilise GGUF (le modèle GGUF n'a pas de tokenizer)
-        use_gguf = (self.tokenizer is None)
+        # Vérifier le backend actif
+        use_gguf = self.backend_type == "gguf"
+        use_vllm = self.backend_type == "vllm"
         
         # Générer un session_id si non fourni
         if session_id is None:
@@ -2827,7 +3729,10 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 # Génération avec GGUF (llama-cpp-python)
                 response = self._generate_gguf(prompt)
                 # Nettoyer la réponse
-                response = self._clean_response(response)
+                response = self._clean_response(response, message)
+            elif use_vllm:
+                response = self._generate_vllm(prompt)
+                response = self._clean_response(response, message)
             else:
                 # Génération avec transformers
                 if not self.tokenizer:
@@ -2874,7 +3779,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
                 
                 # Nettoyer la réponse
-                response = self._clean_response(response)
+                response = self._clean_response(response, message)
             
             # Journaliser l'interaction dans la mémoire si disponible
             if self.memory:
@@ -2931,6 +3836,11 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             
         except Exception as e:
             logger.error(f"Erreur génération: {e}", exc_info=True)
+            self._log_system_event(
+                "exchange_error",
+                session_id,
+                {"message": message, "error": str(e), "mode": "internal"},
+            )
             raise Exception(f"Erreur génération: {e}")
     
     async def _generate_gguf_stream(
@@ -3172,6 +4082,171 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     else:
                         break
     
+    def _generate_vllm(self, prompt: str) -> str:
+        """Génère une réponse avec vLLM."""
+        try:
+            from vllm import SamplingParams
+        except ImportError:
+            raise ImportError("vLLM non disponible pour la génération")
+
+        sampling_params = SamplingParams(
+            temperature=self.config.temperature,
+            top_p=self.config.top_p,
+            top_k=self.config.top_k,
+            repetition_penalty=self.config.repetition_penalty,
+            max_tokens=self.config.max_length,
+        )
+        formatted_prompt = self._format_vllm_prompt(prompt)
+        outputs = self.model.generate([formatted_prompt], sampling_params=sampling_params)
+        if not outputs:
+            return ""
+        return outputs[0].outputs[0].text if outputs[0].outputs else ""
+
+    def _classify_intent_with_router_model(self, message: str) -> Optional[str]:
+        """
+        Classification d'intention via RouterBrain local.
+        Retour attendu: LANG|CODE|VISION|AUDIO|MEMORY|IDENTITY|SYSTEM
+        """
+        label, _ = self._classify_intent_with_router_model_with_confidence(message)
+        return label
+
+    def _classify_intent_with_router_model_with_confidence(
+        self, message: str
+    ) -> tuple[Optional[str], float]:
+        """
+        Classification d'intention via RouterBrain local avec score de confiance.
+        Le score est heuristique mais utile pour déclencher le fallback pattern.
+        """
+        labels = ("LANG", "CODE", "VISION", "AUDIO", "MEMORY", "IDENTITY", "SYSTEM")
+
+        def _extract_label_and_confidence(raw_text: str) -> tuple[Optional[str], float]:
+            raw = (raw_text or "").strip().upper()
+            exact_match = raw in labels
+            for label in labels:
+                if label in raw:
+                    confidence = 0.95 if exact_match else 0.55
+                    return (label, confidence)
+            return (None, 0.0)
+
+        if not getattr(self.config, "enable_real_brain_routing", False):
+            return (None, 0.0)
+
+        prompt = (
+            "Tu es un routeur d'intention.\n"
+            "Réponds avec UNE seule étiquette parmi: LANG, CODE, VISION, AUDIO, MEMORY, IDENTITY, SYSTEM.\n"
+            "Message utilisateur:\n"
+            f"{message}\n"
+            "Étiquette:"
+        )
+
+        # 1) Chemin prioritaire: router_model dédié (vLLM)
+        self._ensure_router_brain()
+        if self.router_brain_model is not None:
+            try:
+                from vllm import SamplingParams
+
+                params = SamplingParams(temperature=0.0, top_p=1.0, max_tokens=4)
+                out = self.router_brain_model.generate([prompt], sampling_params=params)
+                raw = out[0].outputs[0].text if out and out[0].outputs else ""
+                label, confidence = _extract_label_and_confidence(raw)
+                if label:
+                    return (label, confidence)
+            except Exception as e:
+                logger.debug(f"Router model dédié (vLLM) échoué: {e}")
+
+        # 2) Chemin réel LLM sur backend principal transformers
+        if self.backend_type == "transformers" and self.model is not None and self.tokenizer is not None:
+            try:
+                import torch
+
+                encoded = self.tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    padding=False,
+                    truncation=True,
+                    max_length=min(1024, self.config.max_prompt_length),
+                )
+                input_ids = encoded["input_ids"].to(self.device)
+                attention_mask = encoded.get("attention_mask")
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(self.device)
+
+                with torch.no_grad():
+                    outputs = self.model.generate(
+                        input_ids,
+                        attention_mask=attention_mask,
+                        max_length=input_ids.shape[1] + 4,
+                        do_sample=False,
+                        temperature=0.0,
+                        top_p=1.0,
+                        top_k=1,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
+                generated_ids = outputs[0][input_ids.shape[1]:]
+                raw = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
+                label, confidence = _extract_label_and_confidence(raw)
+                if label:
+                    return (label, confidence)
+            except Exception as e:
+                logger.debug(f"Router model via backend transformers échoué: {e}")
+
+        return (None, 0.0)
+
+    def _format_vllm_prompt(self, prompt: str) -> str:
+        """
+        Formate le prompt pour modèles instruct (chat template si disponible).
+        Fallback: prompt brut.
+        """
+        try:
+            tokenizer = self.model.get_tokenizer()
+            if tokenizer and hasattr(tokenizer, "apply_chat_template"):
+                messages = [{"role": "user", "content": prompt}]
+                return tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+        except Exception as e:
+            logger.debug(f"Impossible d'appliquer le chat template vLLM: {e}")
+        return prompt
+
+    async def _generate_vllm_stream(
+        self,
+        prompt: str,
+        stream_callback: Optional[Callable[[str], Awaitable[None]]] = None
+    ) -> AsyncIterator[str]:
+        """
+        Streaming vLLM simulé en chunks.
+        Le mode moteur Python retourne la réponse complète, on la découpe pour l'UI.
+        """
+        text = self._generate_vllm(prompt)
+        chunk_size = 16
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i:i + chunk_size]
+            if not chunk:
+                continue
+            if stream_callback:
+                try:
+                    await stream_callback(chunk)
+                except Exception as cb_err:
+                    logger.debug(f"Erreur callback streaming vLLM: {cb_err}")
+            yield chunk
+
+    def close(self) -> None:
+        """Libère explicitement les ressources du backend actif."""
+        if self.backend_type != "vllm" or self.model is None:
+            return
+        try:
+            if hasattr(self.model, "llm_engine") and hasattr(self.model.llm_engine, "shutdown"):
+                self.model.llm_engine.shutdown()
+        except Exception as e:
+            logger.debug(f"Arrêt explicite vLLM ignoré: {e}")
+        finally:
+            self.model = None
+            self.tokenizer = None
+            self.backend_type = "unknown"
+
     def _generate_gguf(self, prompt: str) -> str:
         """Génère une réponse avec un modèle GGUF (llama-cpp-python)."""
         # Log du prompt avant génération (pour debug)
@@ -3506,23 +4581,19 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         return "\n".join(lines)
 
     async def _classify_request_theme(self, user_request: str) -> Optional[str]:
-        """Classe la requête dans un thème via Groq/Gemini (V2, Étape 1)."""
-        adapter = self.groq_adapter or self.gemini_adapter
-        if not adapter:
-            return None
-        prompt = self._build_theme_classification_prompt(user_request)
-        try:
-            raw = await adapter.query(prompt)  # type: ignore[func-returns-value]
-        except Exception as e:
-            logger.debug(f"🔍 [PATTERNS] Classification thème échouée: {e}")
-            return None
-        raw = (raw or "").strip()
-        if not raw:
-            return None
-        # Normaliser : prendre la première ligne, extraire un mot/thème
-        first_line = raw.split("\n")[0].strip()
-        # Supprimer guillemets éventuels
-        theme = first_line.strip('"\'')
+        """Classe la requête dans un thème via heuristique locale (PatternBrain local)."""
+        msg = (user_request or "").lower()
+        if any(k in msg for k in ("qui es-tu", "qui es tu", "identité", "identite", "ton nom")):
+            theme = "identite_lia"
+        elif any(k in msg for k in ("souviens", "rappelle", "mémoire", "memoire", "historique")):
+            theme = "memoire_utilisateur"
+        elif any(k in msg for k in ("code", "python", "bug", "refactor", "implémente", "implement")):
+            theme = "code"
+        elif any(k in msg for k in ("bonjour", "salut", "hello", "bonsoir")):
+            theme = "salutation"
+        else:
+            theme = "no_pattern"
+
         if theme and len(theme) < 80:
             # Créer le thème s'il n'existe pas encore (pour les thèmes par défaut comme "identité")
             if self.memory and hasattr(self.memory, "add_theme_pattern"):
@@ -3763,13 +4834,84 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
 
         return valid
 
+    async def _recommend_pattern_sequence_with_brain(
+        self, user_request: str, executed_sequence: List[str]
+    ) -> tuple[List[str], str, str]:
+        """Recommande une suite de patterns avec mode hybride (remote puis fallback local)."""
+        # 1) Remote pattern_brain (prioritaire)
+        if getattr(self.config, "enable_pattern_brain_remote", True):
+            try:
+                import httpx
+            except Exception:
+                logger.warning("⚠️  [PATTERNS] httpx indisponible pour PatternBrain.")
+            else:
+                payload = {
+                    "user_request": user_request,
+                    "executed_sequence": executed_sequence,
+                    "actions_catalog": PATTERN_ACTIONS_CATALOG,
+                }
+                try:
+                    async with httpx.AsyncClient(timeout=30.0) as client:
+                        resp = await client.post(PATTERN_BRAIN_URL, json=payload)
+                        resp.raise_for_status()
+                        data = resp.json()
+                    sequence = data.get("sequence") or []
+                    raw = data.get("raw") or ""
+                    if isinstance(sequence, list):
+                        parsed_remote = [str(x) for x in sequence if str(x)]
+                        if parsed_remote:
+                            return (parsed_remote, str(raw), "remote")
+                except Exception as e:
+                    logger.warning(f"⚠️  [PATTERNS] PatternBrain indisponible: {e}")
+
+        # 2) Fallback local LLM (résilience hors service HTTP)
+        if getattr(self.config, "enable_pattern_brain_local_fallback", True):
+            local_sequence, local_raw = self._recommend_pattern_sequence_with_local_llm(
+                user_request=user_request,
+                executed_sequence=executed_sequence,
+            )
+            if local_sequence:
+                return (local_sequence, local_raw, "local_fallback")
+
+        return ([], "", "none")
+
+    def _recommend_pattern_sequence_with_local_llm(
+        self, user_request: str, executed_sequence: List[str]
+    ) -> tuple[List[str], str]:
+        """Fallback local: utilise le LLM principal pour proposer une suite de menus."""
+        if not self.model:
+            return ([], "")
+        try:
+            prompt = self._build_pattern_gemini_question(
+                user_request=user_request,
+                executed_sequence=executed_sequence,
+                use_v2_format=True,
+            )
+            if self.backend_type == "gguf":
+                raw = self._generate_gguf(prompt)
+            elif self.backend_type == "vllm":
+                raw = self._generate_vllm(prompt)
+            else:
+                # En backend transformers, on évite un chemin trop lourd ici pour rester robuste.
+                return ([], "")
+            _, parsed = self._parse_pattern_response_v2(raw, list(PATTERN_ACTIONS_CATALOG.keys()))
+            parsed = self._filter_valid_pattern_sequence(parsed)
+            logger.info(
+                f"✅ [PATTERNS] Fallback local utilisé. "
+                f"Sequence={parsed if parsed else 'vide'}"
+            )
+            return (parsed, raw)
+        except Exception as e:
+            logger.warning(f"⚠️  [PATTERNS] Fallback local échoué: {e}")
+            return ([], "")
+
 
     async def _learn_menu_patterns_with_agent(
         self,
         user_request: str,
         plan,
     ) -> None:
-        """Apprend des patterns de menus via un modèle externe et met à jour la table `patterns`.
+        """Apprend des patterns de menus via PatternBrain et met à jour la table `patterns`.
 
         Phase 1 (SYSTEME_PATTERNS.md) :
         - Collecter la suite d'actions exécutée
@@ -3780,13 +4922,9 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         """
         # Important: sérialiser pour éviter des appels concurrents au modèle (GGUF) et à la DB.
         async with self._patterns_learning_lock:
-            # Nécessite la mémoire + un adaptateur externe (Groq ou Gemini) disponible
+            # Nécessite la mémoire
             if not self.memory:
                 logger.info("ℹ️  [PATTERNS] Mémoire indisponible, apprentissage patterns ignoré.")
-                return
-            adapter = self.groq_adapter or self.gemini_adapter
-            if not adapter:
-                logger.info("ℹ️  [PATTERNS] Aucun adaptateur externe disponible (Groq/Gemini), apprentissage patterns ignoré.")
                 return
 
             executed_sequence = self._build_menu_pattern_sequence(plan)
@@ -3795,42 +4933,31 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 logger.info("ℹ️  [PATTERNS] Séquence vide, rien à apprendre.")
                 return
 
-            question = self._build_pattern_gemini_question(
+            # Appeler PatternBrain local pour obtenir la suite optimale
+            allowed_codes = list(PATTERN_ACTIONS_CATALOG.keys())
+            theme_pattern: Optional[str] = await self._classify_request_theme(user_request)
+            parsed, raw, pattern_source = await self._recommend_pattern_sequence_with_brain(
                 user_request=user_request,
                 executed_sequence=executed_sequence,
-                use_v2_format=True,
             )
-            # Log du prompt envoyé (tronqué pour rester lisible)
-            preview_q = question if len(question) <= 800 else question[:800] + "..."
-            logger.info(f"📝 [PATTERNS] Prompt envoyé à Gemini (apprentissage patterns):\n{preview_q}")
-
-            # Appeler Gemini directement pour obtenir la suite optimale
-            allowed_codes = list(PATTERN_ACTIONS_CATALOG.keys())
-
-            raw = ""
-            theme_pattern: Optional[str] = None
-            parsed: List[str] = []
-            try:
-                raw = await adapter.query(question)  # type: ignore[func-returns-value]
-            except Exception as e:
-                err_msg = str(e).strip() or repr(e)
-                logger.warning(
-                    "⚠️  [PATTERNS] Appel Gemini pour apprentissage patterns échoué: %s - %s",
-                    type(e).__name__,
-                    err_msg,
-                )
-                return
-
             preview_a = raw if len(raw or "") <= 400 else (raw or "")[:400] + "..."
-            adapter_name = "Groq" if self.groq_adapter else "Gemini"
-            logger.info(f"📝 [PATTERNS] Réponse brute {adapter_name} (patterns):\n{preview_a}")
-
-            # Parser la réponse V2 : {{theme},{B2, G3, G5}} ou V1 : {B2, G3, G5}
-            theme_pattern, parsed = self._parse_pattern_response_v2(raw or "", allowed_codes)
+            logger.info(
+                f"📝 [PATTERNS] Réponse brute PatternBrain (source={pattern_source}):\n{preview_a}"
+            )
+            self._log_system_event(
+                "pattern_recommendation",
+                None,
+                {
+                    "pattern_source": pattern_source,
+                    "user_request": user_request[:200],
+                    "executed_sequence": executed_sequence,
+                    "recommended_sequence": parsed,
+                },
+            )
 
             if not parsed:
                 logger.warning(
-                    "⚠️  [PATTERNS] Impossible de parser une suite valide depuis l'agent. "
+                    "⚠️  [PATTERNS] Impossible d'obtenir une suite valide depuis PatternBrain. "
                     f"Dernière réponse: {preview_a}"
                 )
                 return
@@ -3901,7 +5028,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     prev_step=prev_step,
                     recommended_step=recommended_step,
                     weights=weights,
-                    source="gemini",
+                    source=pattern_source,
                     confidence=0.9,
                     theme_pattern=theme_pattern,
                 )
@@ -3940,7 +5067,101 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         except Exception as e:
             logger.warning(f"⚠️  [PATTERNS] Erreur dans learn_patterns_from_last: {e}")
 
-    def _clean_response(self, response: str) -> str:
+    @staticmethod
+    def _concision_profile_from_planned_actions(actions: List[Any]) -> str:
+        """Déduit le profil de concision post-génération à partir du plan exécuté.
+
+        Préféré à l'analyse du texte utilisateur : aligné sur les actions réellement choisies
+        (ex. consultation environnement/capacités → réponse plus développée).
+        """
+        from .cognitive_models import ActionType
+
+        types_seen = {getattr(a, "type", None) for a in (actions or [])}
+        if ActionType.CONSULT_ENVIRONMENT in types_seen:
+            return "extended"
+        return "default"
+
+    @staticmethod
+    def _user_requests_capability_overview(user_request: Optional[str]) -> bool:
+        """Détecte les questions « que peux-tu faire / tes capacités » (heuristique légère)."""
+        if not user_request:
+            return False
+        msg = user_request.strip().lower()
+        needles = (
+            "capacit",
+            "capabilit",
+            "que peux-tu",
+            "que peux tu",
+            "que peut-on",
+            "que peut tu",
+            "quelles sont tes",
+            "quels sont tes",
+            "qu'est-ce que tu",
+            "qu'est ce que tu",
+            "quest ce que tu",
+            "tu sais faire",
+            "fonctionnalit",
+            "ton environnement",
+            "dans ton environnement",
+            "tes outils",
+            "pour quoi tu sers",
+            "limitations",
+            "what can you",
+            "your capabilities",
+            "what are you able",
+        )
+        return any(n in msg for n in needles)
+
+    @staticmethod
+    def _build_safe_fallback_response(user_request: str) -> str:
+        """
+        Réponse de secours pour éviter toute sortie vide en production.
+        """
+        msg = (user_request or "").strip().lower()
+        if any(k in msg for k in ("bonjour", "salut", "hello", "bonsoir", "coucou")):
+            return "Bonjour ! Comment puis-je vous aider aujourd'hui ?"
+        return (
+            "Je suis là pour vous aider. Pouvez-vous reformuler votre demande en une phrase ?"
+        )
+
+    @staticmethod
+    def _semantic_decision_guidance(primary_brain: str, menu_actions: List[Any]) -> str:
+        """
+        Construit une guidance sémantique non-bloquante pour la décision de menu.
+        Objectif: aligner les choix avec l'intention détectée sans forcer un chemin.
+        """
+        brain = (primary_brain or "lang").strip().lower()
+        action_values = {
+            getattr(getattr(a, "type", None), "value", "") for a in (menu_actions or [])
+        }
+
+        priorities: Dict[str, List[str]] = {
+            "identity": ["consult_identity", "consult_traits", "respond"],
+            "system": ["consult_environment", "consult_memory", "respond"],
+            "memory": ["consult_memory", "search_memory", "respond"],
+            "code": ["consult_request", "consult_environment", "respond"],
+            "vision": ["consult_environment", "consult_request", "respond"],
+            "audio": ["consult_environment", "consult_request", "respond"],
+            "lang": ["consult_request", "respond"],
+        }
+        preferred = priorities.get(brain, priorities["lang"])
+        available_preferred = [x for x in preferred if x in action_values]
+        if not available_preferred:
+            return ""
+
+        pretty = ", ".join(available_preferred)
+        return (
+            f"Le cerveau primaire détecté est '{brain}'. "
+            f"Privilégie d'abord des actions alignées avec cette intention ({pretty}) "
+            "avant de répondre directement, sauf si l'information est déjà suffisante."
+        )
+
+    def _clean_response(
+        self,
+        response: str,
+        user_request: Optional[str] = None,
+        concision_profile: Optional[str] = None,
+    ) -> str:
         """
         Nettoie la réponse générée.
         
@@ -3948,7 +5169,23 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         - Questions légitimes que LIA pose à l'utilisateur (à préserver)
         - Interactions fictives avec "Utilisateur :" ou "LIA :" (à supprimer)
         - Sections techniques (### Définition, etc.) (à supprimer)
+
+        user_request : en secours lorsque ``concision_profile`` est absent (génération sans planner).
+        concision_profile : ``"extended"`` | ``"default"`` | ``None``.
+            Si le planificateur a choisi ``CONSULT_ENVIRONMENT``, on passe ``"extended"`` pour
+            des plafonds assouplis ; ``"default"`` force une réponse courte même si les mots-clés
+            utilisateur auraient levé la limite ; ``None`` retombe sur une heuristique ``user_request``.
         """
+        # 0) Extraction structurelle: si le modèle régurgite le prompt,
+        # garder uniquement la section de sortie attendue.
+        if "=== SORTIE LIA ===" in response:
+            response = response.split("=== SORTIE LIA ===")[-1]
+
+        # 1) Nettoyage générique de lignes "métadonnées/protocole" (pas de cas par question).
+        response = re.sub(r"^\s*#?[A-Z][A-Z0-9_#\-]{2,}\s*:?(\s.*)?$", "", response, flags=re.MULTILINE)
+        response = re.sub(r"^\s*(Interaction_ID|UtilisateurInteraction_ID)\s*:.*$", "", response, flags=re.MULTILINE | re.IGNORECASE)
+        response = re.sub(r"^\s*==\s*.*?==\s*$", "", response, flags=re.MULTILINE)
+
         # Marqueurs à détecter pour arrêter le nettoyage (interactions fictives)
         # Ces patterns indiquent que LIA invente des interactions
         stop_markers = [
@@ -3963,6 +5200,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             "### ECHANGE",
             "=== ÉCHANGE",
             "=== ECHANGE",
+            "=== CONSIGNE DE RÉPONSE",
             # Échos possibles de sections système
             "=== MON ENVIRONNEMENT ===",
             "=== QUI JE SUIS ===",
@@ -3985,6 +5223,14 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             "Je m'apelle:",  # Fragment d'identité
             "Je m'appelle:",  # Fragment d'identité
             "l'une des entités",  # Fragment de contexte
+            "#USERACTION#",
+            "#METADATA#",
+            "Interaction_ID:",
+            "UtilisateurInteraction_ID:",
+            "== Demande user ==",
+            "Voici des nouvelles informations pour votre compte utilisateur",
+            "Votre nom:",
+            "---",
         ]
         
         # Trouver le premier marqueur d'arrêt (interaction fictive)
@@ -4045,9 +5291,14 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         response = re.sub(r"Je m'apelle:.*?(?=\n|$)", '', response, flags=re.MULTILINE)
         response = re.sub(r"Je m'appelle:.*?(?=\n|$)", '', response, flags=re.MULTILINE)
         response = re.sub(r"l'une des entités.*?(?=\n|$)", '', response, flags=re.MULTILINE)
+        response = re.sub(r"#USERACTION#.*?(?=\n|$)", '', response, flags=re.MULTILINE)
+        response = re.sub(r"#METADATA#.*?(?=\n|$)", '', response, flags=re.MULTILINE)
+        response = re.sub(r"(Utilisateur)?Interaction_ID\s*:.*?(?=\n|$)", '', response, flags=re.MULTILINE | re.IGNORECASE)
+        response = re.sub(r"==\s*Demande user\s*==.*?(?=\n|$)", '', response, flags=re.MULTILINE | re.IGNORECASE)
         
         # Supprimer les numéros de liste isolés (1., 2., 3., etc.) au début de lignes
         response = re.sub(r'^\d+\.\s*', '', response, flags=re.MULTILINE)
+        response = re.sub(r'^\d+\)\s*', '', response, flags=re.MULTILINE)
         
         # Supprimer les fragments qui commencent par des numéros suivis de texte technique
         # Pattern: "2. Je m'apelle:" ou "3. Session en cours:"
@@ -4074,6 +5325,97 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         # Nettoyer les espaces multiples
         response = re.sub(r'\n{3,}', '\n\n', response)
         response = re.sub(r' {2,}', ' ', response)
+
+        if concision_profile == "extended":
+            relax_concision = True
+        elif concision_profile == "default":
+            relax_concision = False
+        else:
+            relax_concision = self._user_requests_capability_overview(user_request)
+
+        # Coupe "deuxième voix" APRÈS nettoyage de base mais AVANT troncatures agressives
+        # (paragraphes / phrases courtes), sinon le parasite peut être coupé avant détection.
+        voice_shift_patterns = (
+            r"(?i)Lia\s+a\b",
+            r"(?i)(?:[:;=8]-?[DdPpOo]|:\))\s*[Ll](?:'|’|ia)\b",
+            r"(?i)\bL(?:'|’)?IA\b",
+            r"(?i)\bCependant,\s+sachez\b",
+            r"(?i)\bToutefois,\s+sachez\b",
+            r"(?i)\bDont\s+elle\s+ne\s+peut\s+pas\s+parler\b",
+            r"(?i)\bfonctionnalités\s+techniques\s+avancées\b",
+            r"(?i)\bpour\s+préserver\s+ses\b",
+            r"(?i)\bde\s+même\s+lorsqu['’]?il\s+faut\b",
+        )
+        for pat in voice_shift_patterns:
+            m = re.search(pat, response)
+            if m and m.start() >= 48:
+                response = response[: m.start()].rstrip()
+                if response and not response.endswith((".", "!", "?")):
+                    response += "."
+
+        if relax_concision:
+            max_chars = 1700
+            max_sentences = 12
+            short_cap = 1400
+            max_paragraphs_keep = 4
+        else:
+            max_chars = 700
+            max_sentences = 3
+            short_cap = 320
+            max_paragraphs_keep = 1
+
+        # 2) Garde-fou générique contre la dérive:
+        # - si beaucoup de séparateurs / artefacts, garder le premier bloc cohérent.
+        noisy_separators = response.count("---") + response.count("==") + response.count("###")
+        if noisy_separators >= 2:
+            first_block = response.split("\n\n")[0].strip()
+            if len(first_block) >= 30:
+                response = first_block
+
+        # 3) Limite de longueur: évite les réponses qui partent en "roman" hors-sujet.
+        if len(response) > max_chars:
+            response = response[:max_chars].rstrip()
+            if not response.endswith((".", "!", "?")):
+                response += "..."
+
+        # 4) Post-traitement générique de concision:
+        # si la réponse n'est ni du code ni une liste structurée, garder
+        # un bloc court et orienté action.
+        has_code = "```" in response
+        has_structured_list = bool(re.search(r"^\s*[-*]\s+", response, flags=re.MULTILINE))
+        if not has_code and not has_structured_list:
+            # Garder le premier paragraphe non vide pour éviter les dérives narratives.
+            paragraphs = [p.strip() for p in response.split("\n\n") if p.strip()]
+            if paragraphs:
+                if max_paragraphs_keep > 1 and len(paragraphs) > 1:
+                    response = "\n\n".join(paragraphs[:max_paragraphs_keep]).strip()
+                else:
+                    response = paragraphs[0]
+
+            # Puis limiter à quelques phrases max.
+            sentence_chunks = re.split(r"(?<=[.!?])\s+", response.strip())
+            sentence_chunks = [s for s in sentence_chunks if s.strip()]
+            if len(sentence_chunks) > max_sentences:
+                response = " ".join(sentence_chunks[:max_sentences]).strip()
+
+            # Limite dure additionnelle pour réponses conversationnelles.
+            if len(response) > short_cap:
+                response = response[:short_cap].rstrip()
+                if not response.endswith((".", "!", "?")):
+                    response += "..."
+
+        # 6) Normalisation légère des listes collées sur une seule ligne (après concision pour ne pas perdre les items).
+        # Transforme "... : - A - B - C" en format multi-lignes.
+        response = re.sub(r":\s*-\s*", ":\n- ", response)
+        response = re.sub(r"\s+-\s+", "\n- ", response)
+        response = re.sub(r"\n{3,}", "\n\n", response)
+
+        for pat in voice_shift_patterns:
+            m = re.search(pat, response)
+            if m and m.start() >= 48:
+                response = response[: m.start()].rstrip()
+                if response and not response.endswith((".", "!", "?")):
+                    response += "."
         
         return response.strip()
     

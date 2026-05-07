@@ -10,6 +10,9 @@ bitsandbytes>=0.39.0; sys_platform != "darwin"
 # Quantisation CPU (GGUF + llama.cpp - recommandé pour CPU-only)
 llama-cpp-python>=0.2.0
 
+# Serving haute performance (GPU ROCm/CUDA)
+vllm>=0.5.0
+
 # Tests
 pytest>=7.0.0
 pytest-asyncio>=0.21.0

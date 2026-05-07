@@ -15,7 +15,7 @@ class FakeMemoryAdapter:
             ],
             "memories": [{"content": "L'utilisateur aime le café"}],
             "recent_interactions": [{"prompt": "Bonjour", "response": "Salut"}],
-            "session_goals": [],
+            "session_goals": [{"description": "Aider clairement l'utilisateur"}],
         }
 
     def get_context(self, limit_traits=10, limit_memories=10, limit_interactions=5):
@@ -24,7 +24,7 @@ class FakeMemoryAdapter:
             "traits": (self._context["traits"] or [])[:limit_traits],
             "memories": (self._context["memories"] or [])[:limit_memories],
             "recent_interactions": (self._context["recent_interactions"] or [])[:limit_interactions],
-            "session_goals": [],
+            "session_goals": self._context.get("session_goals") or [],
         }
 
 
@@ -63,6 +63,26 @@ async def test_search_memory_finds_match():
     out = await ex.execute_action(action)
     assert out["query"] == "café"
     assert len(out["results"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_query_tools_objectives_recent_and_emotion():
+    mem = FakeMemoryAdapter()
+    mem._context["memories"] = [
+        {"content": "Souvenir de joie après un succès", "category": "emotion_joie"},
+        {"content": "Note factuelle neutre", "category": "fact"},
+    ]
+    ex = ActionExecutor(memory_adapter=mem)
+
+    out_obj = await ex.execute_action(Action(ActionType.CONSULT_OBJECTIVES, {}, priority=1))
+    assert len(out_obj["objectives"]) == 1
+
+    out_ep = await ex.execute_action(Action(ActionType.CONSULT_RECENT_EPISODES, {"limit": 3}, priority=1))
+    assert len(out_ep["recent_episodes"]) >= 1
+
+    out_em = await ex.execute_action(Action(ActionType.SEARCH_BY_EMOTION, {"emotion": "joie", "limit": 10}, priority=1))
+    assert out_em["emotion"] == "joie"
+    assert len(out_em["results"]) == 1
 
 
 

@@ -515,6 +515,40 @@
             align-items: center;
         }
 
+        .self-mod-panel {
+            display: none;
+            margin: 12px 20px 0 20px;
+            padding: 10px 12px;
+            border: 1px solid #ffe082;
+            border-left: 4px solid #ffb300;
+            background: #fff8e1;
+            border-radius: 8px;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .self-mod-panel.active {
+            display: flex;
+        }
+
+        .self-mod-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .small-btn {
+            border: none;
+            border-radius: 16px;
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .approve-btn { background: #2e7d32; color: white; }
+        .reject-btn { background: #c62828; color: white; }
+
         .chat-input {
             flex: 1;
             padding: 12px 16px;
@@ -635,6 +669,14 @@
             </div>
         </div>
 
+        <div id="selfModPanel" class="self-mod-panel">
+            <div id="selfModText">Proposition d'auto-modification en attente.</div>
+            <div class="self-mod-actions">
+                <button id="approveSelfModBtn" class="small-btn approve-btn">Approuver</button>
+                <button id="rejectSelfModBtn" class="small-btn reject-btn">Rejeter</button>
+            </div>
+        </div>
+
         <div class="chat-input-container">
             <input 
                 type="text" 
@@ -664,6 +706,10 @@
         const sendButton = document.getElementById('sendButton');
         const statusDot = document.getElementById('statusDot');
         const statusText = document.getElementById('statusText');
+        const selfModPanel = document.getElementById('selfModPanel');
+        const selfModText = document.getElementById('selfModText');
+        const approveSelfModBtn = document.getElementById('approveSelfModBtn');
+        const rejectSelfModBtn = document.getElementById('rejectSelfModBtn');
 
         // Fonction pour formater l'heure
         function formatTime(timestamp) {
@@ -1316,6 +1362,48 @@
             return container.id;
         }
 
+        function applyPendingSelfModState(pending, showSystemMessage = false) {
+            const hasPending = !!(pending && pending.has_pending);
+            const targetModule = pending && pending.target_module ? pending.target_module : null;
+            if (hasPending && targetModule) {
+                selfModText.textContent = `Proposition en attente pour ${targetModule}.`;
+                selfModPanel.classList.add('active');
+                if (showSystemMessage) {
+                    addMessage(`Auto-modification en attente: ${targetModule}.`, 'system', new Date().toISOString());
+                }
+            } else {
+                selfModPanel.classList.remove('active');
+            }
+        }
+
+        async function approvePendingSelfMod() {
+            try {
+                const response = await fetch('/self-improvement/approve', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId })
+                });
+                const data = await response.json();
+                addMessage(data.result || 'Auto-modification approuvée.', 'system', new Date().toISOString());
+            } catch (e) {
+                addMessage(`Erreur approbation: ${e}`, 'error', new Date().toISOString());
+            }
+        }
+
+        async function rejectPendingSelfMod() {
+            try {
+                const response = await fetch('/self-improvement/reject', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: sessionId, reason: 'rejected from chat UI' })
+                });
+                const data = await response.json();
+                addMessage(data.result || 'Auto-modification rejetée.', 'system', new Date().toISOString());
+            } catch (e) {
+                addMessage(`Erreur rejet: ${e}`, 'error', new Date().toISOString());
+            }
+        }
+
         // Fonction pour se connecter
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1450,6 +1538,10 @@
                         // Statistiques (pour debug/futur usage)
                         console.log('Stats reçues:', data.content);
                         break;
+
+                    case 'self_mod_pending_changed':
+                        applyPendingSelfModState(data.pending, true);
+                        break;
                     
                     default:
                         console.warn('Message non géré:', {
@@ -1472,6 +1564,7 @@
                 statusDot.classList.remove('connected');
                 chatInput.disabled = true;
                 sendButton.disabled = true;
+                selfModPanel.classList.remove('active');
                 
                 // Tentative de reconnexion après 3 secondes
                 setTimeout(() => {
@@ -1511,6 +1604,8 @@
 
         // Événements
         sendButton.addEventListener('click', sendMessage);
+        approveSelfModBtn.addEventListener('click', approvePendingSelfMod);
+        rejectSelfModBtn.addEventListener('click', rejectPendingSelfMod);
         
         chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {

@@ -13,7 +13,7 @@ from datetime import datetime
 # Ajouter le répertoire parent au PYTHONPATH
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Body
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -230,29 +230,93 @@ async def initialize_user_channel():
     
     try:
         # Configuration du noyau primaire
-        # Utiliser un chemin absolu pour le modèle GGUF (préférer Qwen2.5-7B si disponible)
-        project_root = Path(__file__).parent.parent.resolve()
-        qwen_path = project_root / "models" / "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
-        llama_path = project_root / "models" / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
-        gguf_model_path = qwen_path if qwen_path.exists() else llama_path
-        
-        # Vérifier que le modèle existe
-        if not gguf_model_path.exists():
-            logger.warning(f"⚠️  Modèle GGUF non trouvé: {gguf_model_path}")
-            logger.warning("   Utilisation du modèle par défaut (Qwen)")
+        # Priorité: variables d'environnement (vLLM/transformers), puis fallback GGUF historique.
+        llm_backend = os.getenv("LIA_LLM_BACKEND", "auto").strip().lower()
+        llm_model_name = os.getenv("LIA_LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct").strip()
+        llm_max_length = int(os.getenv("LIA_LLM_MAX_LENGTH", "512"))
+        llm_temperature = float(os.getenv("LIA_LLM_TEMPERATURE", "0.8"))
+        llm_vllm_max_len = int(os.getenv("LIA_VLLM_MAX_MODEL_LEN", "32768"))
+        llm_vllm_dtype = os.getenv("LIA_VLLM_DTYPE", "float16").strip()
+        llm_vllm_gpu_mem = float(os.getenv("LIA_VLLM_GPU_MEMORY_UTILIZATION", "0.8"))
+        llm_router_model = os.getenv("LIA_ROUTER_MODEL", "Qwen/Qwen2.5-1.5B-Instruct").strip()
+        llm_lang_model = os.getenv("LIA_LANG_MODEL", "Qwen/Qwen2.5-72B-Instruct").strip()
+        llm_code_model = os.getenv("LIA_CODE_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct").strip()
+        llm_enable_self_improvement = os.getenv("LIA_ENABLE_SELF_IMPROVEMENT", "1").strip().lower() in {"1", "true", "yes", "oui"}
+        llm_autonomy_mode = os.getenv("LIA_AUTONOMY_MODE", "menu").strip().lower()
+        llm_autonomy_min_plan_conf = float(os.getenv("LIA_AUTONOMY_MIN_PLAN_CONFIDENCE", "0.55"))
+        llm_autonomy_min_prompt_conf = float(os.getenv("LIA_AUTONOMY_MIN_PROMPT_CONFIDENCE", "0.55"))
+        llm_autonomy_max_replans = int(os.getenv("LIA_AUTONOMY_MAX_REPLANS", "1"))
+        llm_autonomy_max_prompt_rebuilds = int(os.getenv("LIA_AUTONOMY_MAX_PROMPT_REBUILDS", "1"))
+
+        use_env_backend = llm_backend in {"vllm", "transformers"}
+        if use_env_backend:
             core_config = CoreConfig(
-                use_gguf=False,  # Désactiver GGUF si le modèle n'existe pas
-                max_length=512,
-                temperature=0.8
+                model_name=llm_model_name,
+                backend=llm_backend,
+                use_gguf=False,
+                max_length=llm_max_length,
+                temperature=llm_temperature,
+                vllm_max_model_len=llm_vllm_max_len,
+                vllm_dtype=llm_vllm_dtype,
+                vllm_gpu_memory_utilization=llm_vllm_gpu_mem,
+                router_model=llm_router_model,
+                lang_model=llm_lang_model,
+                code_model=llm_code_model,
+                enable_code_brain=True,
+                enable_neural_router=True,
+                enable_real_brain_routing=True,
+                enable_self_improvement=llm_enable_self_improvement,
+                autonomy_mode=llm_autonomy_mode,
+                autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
+                autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
+                autonomy_max_replans=llm_autonomy_max_replans,
+                autonomy_max_prompt_rebuilds=llm_autonomy_max_prompt_rebuilds,
+            )
+            logger.info(
+                "✅ Backend LLM via environnement: backend=%s, router=%s, lang=%s, code=%s",
+                llm_backend,
+                llm_router_model,
+                llm_lang_model,
+                llm_code_model,
             )
         else:
-            logger.info(f"✅ Modèle GGUF trouvé: {gguf_model_path.name}")
-            core_config = CoreConfig(
-                use_gguf=True,
-                gguf_model_path=str(gguf_model_path.resolve()),  # Chemin absolu
-                max_length=512,
-                temperature=0.8
-            )
+            # Utiliser un chemin absolu pour le modèle GGUF (préférer Qwen2.5-7B si disponible)
+            project_root = Path(__file__).parent.parent.resolve()
+            qwen_path = project_root / "models" / "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+            llama_path = project_root / "models" / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+            gguf_model_path = qwen_path if qwen_path.exists() else llama_path
+
+            # Vérifier que le modèle existe
+            if not gguf_model_path.exists():
+                logger.warning(f"⚠️  Modèle GGUF non trouvé: {gguf_model_path}")
+                logger.warning("   Utilisation du modèle par défaut (Qwen)")
+                core_config = CoreConfig(
+                    use_gguf=False,  # Désactiver GGUF si le modèle n'existe pas
+                    max_length=512,
+                    temperature=0.8,
+                    enable_neural_router=True,
+                    enable_self_improvement=llm_enable_self_improvement,
+                    autonomy_mode=llm_autonomy_mode,
+                    autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
+                    autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
+                    autonomy_max_replans=llm_autonomy_max_replans,
+                    autonomy_max_prompt_rebuilds=llm_autonomy_max_prompt_rebuilds,
+                )
+            else:
+                logger.info(f"✅ Modèle GGUF trouvé: {gguf_model_path.name}")
+                core_config = CoreConfig(
+                    use_gguf=True,
+                    gguf_model_path=str(gguf_model_path.resolve()),  # Chemin absolu
+                    max_length=512,
+                    temperature=0.8,
+                    enable_neural_router=True,
+                    enable_self_improvement=llm_enable_self_improvement,
+                    autonomy_mode=llm_autonomy_mode,
+                    autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
+                    autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
+                    autonomy_max_replans=llm_autonomy_max_replans,
+                    autonomy_max_prompt_rebuilds=llm_autonomy_max_prompt_rebuilds,
+                )
         
         # Initialiser la mémoire
         memory = MemoryAdapter()
@@ -310,6 +374,42 @@ async def initialize_user_channel():
         raise
 
 
+async def _get_core_adapter():
+    if user_channel is None:
+        await initialize_user_channel()
+    core = getattr(user_channel, "core_adapter", None)
+    if core is None:
+        raise HTTPException(status_code=503, detail="Core adapter indisponible")
+    return core
+
+
+def _normalize_pending_payload(pending: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not pending:
+        return {"has_pending": False, "target_module": None}
+    return {
+        "has_pending": bool(pending.get("has_proposal")),
+        "target_module": pending.get("target_module"),
+    }
+
+
+async def _emit_self_mod_pending_changed(session_id: Optional[str] = None) -> None:
+    """Push websocket de l'état pending self-mod (session ciblée ou broadcast)."""
+    try:
+        core = await _get_core_adapter()
+        pending = core.get_pending_self_modification() if hasattr(core, "get_pending_self_modification") else None
+        payload = {
+            "type": "self_mod_pending_changed",
+            "pending": _normalize_pending_payload(pending),
+            "timestamp": datetime.now().isoformat(),
+        }
+        if session_id:
+            await manager.send_message(payload, session_id)
+        else:
+            await manager.broadcast(payload)
+    except Exception as e:
+        logger.debug(f"Emission self_mod_pending_changed ignorée: {e}")
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialise le canal utilisateur au démarrage."""
@@ -352,6 +452,83 @@ async def health_check():
     }
 
 
+@app.get("/health/brains")
+async def health_brains():
+    """Expose l'état runtime des brains (Router/Lang/Code)."""
+    if user_channel is None:
+        await initialize_user_channel()
+
+    core = getattr(user_channel, "core_adapter", None)
+    if core is None:
+        raise HTTPException(status_code=503, detail="Core adapter indisponible")
+
+    cfg = getattr(core, "config", None)
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "backend": getattr(core, "backend_type", "unknown"),
+        "brains": {
+            "neural_router_enabled": bool(getattr(cfg, "enable_neural_router", False)),
+            "real_brain_routing_enabled": bool(getattr(cfg, "enable_real_brain_routing", False)),
+            "code_brain_enabled": bool(getattr(cfg, "enable_code_brain", False)),
+            "router_brain_loaded": getattr(core, "router_brain_model", None) is not None,
+            "code_brain_loaded": getattr(core, "code_brain", None) is not None,
+        },
+        "models": {
+            "router_model": getattr(cfg, "router_model", None),
+            "lang_model": getattr(cfg, "lang_model", None),
+            "code_model": getattr(cfg, "code_model", None),
+        },
+    }
+
+
+@app.get("/self-improvement/pending")
+async def get_pending_self_improvement():
+    """Retourne l'état de proposition d'auto-modification en attente."""
+    core = await _get_core_adapter()
+    pending = None
+    if hasattr(core, "get_pending_self_modification"):
+        pending = core.get_pending_self_modification()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "pending": pending,
+    }
+
+
+@app.post("/self-improvement/approve")
+async def approve_self_improvement(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Approuve la proposition en attente et applique la modification."""
+    core = await _get_core_adapter()
+    session_id = payload.get("session_id")
+    if not hasattr(core, "approve_pending_self_modification"):
+        raise HTTPException(status_code=400, detail="Self-improvement non disponible")
+    result = core.approve_pending_self_modification(session_id=session_id)
+    await _emit_self_mod_pending_changed()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "result": result,
+    }
+
+
+@app.post("/self-improvement/reject")
+async def reject_self_improvement(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Rejette la proposition en attente sans appliquer le patch."""
+    core = await _get_core_adapter()
+    reason = payload.get("reason", "rejected from web ui")
+    session_id = payload.get("session_id")
+    if not hasattr(core, "reject_pending_self_modification"):
+        raise HTTPException(status_code=400, detail="Self-improvement non disponible")
+    result = core.reject_pending_self_modification(reason=reason, session_id=session_id)
+    await _emit_self_mod_pending_changed()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "result": result,
+    }
+
+
 @app.websocket("/ws/{session_id}")
 async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """Endpoint WebSocket pour le chat."""
@@ -364,6 +541,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
             "content": "✅ Connecté à LIA. Vous pouvez commencer à converser.",
             "timestamp": datetime.now().isoformat()
         }, session_id)
+        await _emit_self_mod_pending_changed(session_id=session_id)
         
         while True:
             # Recevoir le message de l'utilisateur
@@ -490,6 +668,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         },
                         session_id,
                     )
+                    await _emit_self_mod_pending_changed(session_id=session_id)
 
                     # Lancer l'apprentissage des patterns APRÈS envoi de la réponse, en tâche de fond
                     try:
@@ -511,6 +690,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
                         "content": f"Erreur: {str(e)}",
                         "timestamp": datetime.now().isoformat()
                     }, session_id)
+                    await _emit_self_mod_pending_changed(session_id=session_id)
             
             elif data.get("type") == "get_history":
                 # Récupérer l'historique de la session
@@ -556,7 +736,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     uvicorn.run(
-        "app_chat:app",
+        "web_interface.app_chat:app",
         host=args.host,
         port=args.port,
         reload=args.reload,

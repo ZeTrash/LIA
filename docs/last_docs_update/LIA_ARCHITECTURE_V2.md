@@ -32,6 +32,22 @@ Langage (Broca/Wernicke)      →  LangBrain (communication)
 
 ---
 
+### 1.3 Principe directeur V2: autonomie d'abord, règles fixes en secours
+
+LIA V2 vise une prise de décision majoritairement autonome. Les anciens menus d'actions (`B1`, `B2`, `G1`, etc.) ne disparaissent pas immédiatement, mais changent de rôle:
+
+- Avant: mécanisme principal de pilotage.
+- Après: couche de compatibilité et de fallback.
+
+Le système cible fonctionne ainsi:
+1. Le `NeuralRouter` produit un plan autonome (intent -> outils -> agrégation).
+2. Le plan est exécuté tant que la confiance et les budgets restent dans les seuils.
+3. En cas d'incertitude ou d'échec, fallback vers un parcours fixe compatible V1.
+
+Cette stratégie réduit la dépendance aux choix codés en dur tout en préservant la stabilité opérationnelle.
+
+---
+
 ## 2. Architecture du Cerveau Modulaire
 
 ### 2.1 Vue d'Ensemble
@@ -124,6 +140,8 @@ class NeuralRouter:
 **Intégration avec l'existant :**
 
 Le `NeuralRouter` est une **évolution naturelle** du `LLMAdapter` actuel. La boucle cognitive (`_generate_with_planner`) devient le cœur du dispatcher. Les `ActionType` existants (B1, B2, G1...) sont étendus pour mapper vers les modules.
+
+En V2, ces `ActionType` servent aussi de trace d'audit et de filet de sécurité, pas de logique principale permanente.
 
 ---
 
@@ -517,12 +535,33 @@ class CoreConfig:
     enable_vision_brain: bool = True
     enable_audio_brain: bool = False  # Phase 2
     enable_self_improvement: bool = False  # Phase 3 (à activer avec précaution)
+
+    # Politique d'autonomie (transition V1 -> V2)
+    autonomy_mode: str = "auto_with_audit"  # safe_fallback | auto_with_audit | full_auto
+    router_confidence_threshold: float = 0.70
+    max_router_replans: int = 2
+    enable_menu_fallback: bool = True
     
     # Sandbox d'auto-amélioration
     sandbox_timeout_seconds: int = 60
     max_self_modifications_per_session: int = 3
     require_human_approval_for_self_mod: bool = True  # Sécurité
 ```
+
+---
+
+## 3.4 Stratégie de migration des choix fixes (B/G/S/I/T/C)
+
+Objectif: éviter les règles figées à long terme.
+
+- Phase A (compatibilité): mapping 1:1 des choix fixes vers des plans Router.
+- Phase B (hybride): exécution autonome, mapping menu conservé pour audit observabilité.
+- Phase C (autonomie): suppression de la dépendance fonctionnelle aux choix fixes; fallback conservé pour incidents.
+
+Indicateurs de succès:
+- `auto_path_rate` en hausse continue.
+- `menu_fallback_rate` en baisse continue.
+- aucun cas critique bloqué sans menu.
 
 ---
 

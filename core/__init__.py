@@ -7,6 +7,11 @@ Exports:
 
 from .llm_adapter import LLMAdapter
 from .config import CoreConfig
+from .neural_router import NeuralRouter, BrainType, IntentClassification, BrainDispatchPlan
+from .code_brain import CodeBrain
+from .architecture_graph import ArchitectureGraph, ModuleSpec, SelfModification
+from .self_coding_sandbox import SelfCodingSandbox, SandboxResult
+from .self_improvement_evaluator import SelfImprovementEvaluator, BenchmarkResult, EvaluationResult
 
 # Exports pour le système de planification cognitive (Phase 1-5)
 try:
@@ -23,6 +28,19 @@ try:
     __all__ = [
         "LLMAdapter",
         "CoreConfig",
+        "NeuralRouter",
+        "BrainType",
+        "IntentClassification",
+        "BrainDispatchPlan",
+        "CodeBrain",
+        "ArchitectureGraph",
+        "ModuleSpec",
+        "SelfModification",
+        "SelfCodingSandbox",
+        "SandboxResult",
+        "SelfImprovementEvaluator",
+        "BenchmarkResult",
+        "EvaluationResult",
         # Cognitive planning (Phase 1-5)
         "ActionType",
         "Action",
@@ -43,6 +61,22 @@ try:
         "CognitiveMetrics",
     ]
 except ImportError:
-    __all__ = ["LLMAdapter", "CoreConfig"]
+    __all__ = [
+        "LLMAdapter",
+        "CoreConfig",
+        "NeuralRouter",
+        "BrainType",
+        "IntentClassification",
+        "BrainDispatchPlan",
+        "CodeBrain",
+        "ArchitectureGraph",
+        "ModuleSpec",
+        "SelfModification",
+        "SelfCodingSandbox",
+        "SandboxResult",
+        "SelfImprovementEvaluator",
+        "BenchmarkResult",
+        "EvaluationResult",
+    ]
 
 __version__ = "0.1.0"

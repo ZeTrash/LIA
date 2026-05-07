@@ -40,4 +40,24 @@ async def test_plan_external_intent_adds_query_external_optional():
     assert actions[-1].type == ActionType.RESPOND
 
 
+@pytest.mark.asyncio
+async def test_plan_environment_request_includes_consult_environment():
+    planner = CognitivePlanner()
+    plan = await planner.plan("Que peux-tu faire précisément dans cet environnement local ?")
+
+    actions = plan.sorted_actions()
+    types = [a.type for a in actions]
+    assert ActionType.CONSULT_ENVIRONMENT in types
+    assert actions[-1].type == ActionType.RESPOND
+
+
+@pytest.mark.asyncio
+async def test_plan_objectives_and_emotion_requests_include_query_tools():
+    planner = CognitivePlanner()
+    plan = await planner.plan("Quels sont tes objectifs actuels et les souvenirs liés à l'émotion joie ?")
+    types = [a.type for a in plan.sorted_actions()]
+    assert ActionType.CONSULT_OBJECTIVES in types
+    assert ActionType.SEARCH_BY_EMOTION in types
+
+
 

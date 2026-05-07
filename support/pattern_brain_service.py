@@ -12,6 +12,7 @@ Lancer le service :
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -64,6 +65,7 @@ async def startup_event() -> None:
     global pattern_adapter
 
     project_root = Path(__file__).parent.parent
+    model_cache_dir = os.getenv("LIA_MODEL_CACHE_DIR", "models/hf_cache").strip()
     # Préférer Qwen2.5-7B si disponible, sinon fallback vers Llama-3.2-3B.
     qwen_path = project_root / "models" / "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
     llama_path = project_root / "models" / "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
@@ -73,18 +75,67 @@ async def startup_event() -> None:
         core_config = CoreConfig(
             use_gguf=True,
             gguf_model_path=str(gguf_path.resolve()),
+            model_cache_dir=model_cache_dir,
             max_length=128,
             temperature=0.4,
             top_p=0.9,
             top_k=5,
         )
     else:
+        # IMPORTANT:
+        # Ne jamais hériter du LangBrain global (potentiellement 72B) ici.
+        # Le pattern-brain doit rester léger et isolé.
+        pattern_model = os.getenv("LIA_PATTERN_BRAIN_MODEL", "Qwen/Qwen2.5-7B-Instruct").strip()
+        pattern_device = os.getenv("LIA_PATTERN_BRAIN_DEVICE", "cuda").strip().lower()
+        pattern_backend = os.getenv("LIA_PATTERN_BRAIN_BACKEND", "vllm").strip().lower()
+        allow_heavy_pattern_model = os.getenv("LIA_PATTERN_BRAIN_ALLOW_HEAVY", "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "oui",
+        }
+
+        # Garde-fou: éviter qu'un 72B soit chargé par erreur dans le pattern brain.
+        # Pour l'autoriser, il faut un opt-in explicite via LIA_PATTERN_BRAIN_ALLOW_HEAVY=1.
+        if ("72b" in pattern_model.lower() or "70b" in pattern_model.lower()) and not allow_heavy_pattern_model:
+            print(
+                "⚠️  [pattern_brain] modèle lourd détecté pour pattern brain, "
+                f"fallback auto vers 7B: {pattern_model} -> Qwen/Qwen2.5-7B-Instruct"
+            )
+            pattern_model = "Qwen/Qwen2.5-7B-Instruct"
+
+        if pattern_backend not in {"transformers", "vllm"}:
+            pattern_backend = "vllm"
         core_config = CoreConfig(
+            model_name=pattern_model,
+            lang_model=pattern_model,
+            backend=pattern_backend,
+            device=pattern_device,
+            use_gguf=False,
+            quantize=False,
+            model_cache_dir=model_cache_dir,
+            vllm_max_model_len=8192,
+            vllm_gpu_memory_utilization=0.20,
             max_length=128,
             temperature=0.4,
             top_p=0.9,
             top_k=5,
         )
+
+    # Cache HF explicite pour éviter tout re-téléchargement entre redémarrages/services.
+    cache_root = Path(core_config.model_cache_dir).resolve()
+    hub_dir = cache_root / "hub"
+    os.environ["HF_HOME"] = str(cache_root)
+    os.environ["HUGGINGFACE_HUB_CACHE"] = str(hub_dir)
+    os.environ["TRANSFORMERS_CACHE"] = str(hub_dir)
+
+    print(
+        "[pattern_brain] config: "
+        f"backend={core_config.backend}, device={core_config.device}, "
+        f"model={core_config.model_name}, cache={core_config.model_cache_dir}, "
+        f"vllm_max_model_len={core_config.vllm_max_model_len}, "
+        f"vllm_gpu_memory_utilization={core_config.vllm_gpu_memory_utilization}"
+    )
 
     # Adapter minimal : pas de mémoire, pas de planner
     pattern_adapter = LLMAdapter(

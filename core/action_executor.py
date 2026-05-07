@@ -146,6 +146,21 @@ class ActionExecutor:
             logger.debug(f"    ✅ [EXECUTOR] Mémoires récupérées: {len(result.get('memories', []))}")
             return result
 
+        if action.type == ActionType.CONSULT_OBJECTIVES:
+            logger.debug("    🎯 [EXECUTOR] Consultation des objectifs...")
+            return self._consult_objectives()
+
+        if action.type == ActionType.CONSULT_RECENT_EPISODES:
+            limit = int(action.parameters.get("limit", 5))
+            logger.debug(f"    🕒 [EXECUTOR] Consultation épisodes récents (limit: {limit})...")
+            return self._consult_recent_episodes(limit=limit)
+
+        if action.type == ActionType.SEARCH_BY_EMOTION:
+            emotion = str(action.parameters.get("emotion", "")).strip()
+            limit = int(action.parameters.get("limit", 10))
+            logger.debug(f"    ❤️ [EXECUTOR] Recherche par émotion='{emotion}' (limit: {limit})...")
+            return self._search_by_emotion(emotion=emotion, limit=limit)
+
         if action.type == ActionType.SEARCH_MEMORY:
             query = str(action.parameters.get("query", "")).strip()
             limit = int(action.parameters.get("limit", 10))
@@ -241,6 +256,50 @@ class ActionExecutor:
         q = query.lower()
         hits = [m for m in memories if q in (m.get("content", "") or "").lower()]
         return {"query": query, "results": hits[:limit]}
+
+    def _consult_objectives(self) -> Dict[str, Any]:
+        if not self.memory:
+            return {"objectives": []}
+        context = self.memory.get_context(limit_traits=0, limit_memories=0, limit_interactions=0)
+        return {"objectives": context.get("session_goals", []) or []}
+
+    def _consult_recent_episodes(self, limit: int = 5) -> Dict[str, Any]:
+        if not self.memory:
+            return {"recent_episodes": []}
+        context = self.memory.get_context(limit_traits=0, limit_memories=limit, limit_interactions=limit)
+        episodes: List[Dict[str, Any]] = []
+        for it in context.get("recent_interactions", []) or []:
+            episodes.append(
+                {
+                    "type": "interaction",
+                    "prompt": it.get("prompt"),
+                    "response": it.get("response"),
+                    "timestamp": it.get("timestamp"),
+                }
+            )
+        for m in context.get("memories", []) or []:
+            episodes.append(
+                {
+                    "type": "memory",
+                    "content": m.get("content"),
+                    "category": m.get("category"),
+                    "created_at": m.get("created_at"),
+                }
+            )
+        return {"recent_episodes": episodes[:limit]}
+
+    def _search_by_emotion(self, emotion: str, limit: int = 10) -> Dict[str, Any]:
+        if not self.memory or not emotion:
+            return {"emotion": emotion, "results": []}
+        context = self.memory.get_context(limit_traits=0, limit_memories=100, limit_interactions=0)
+        memories = context.get("memories", []) or []
+        q = emotion.lower()
+        hits = []
+        for m in memories:
+            text = f"{m.get('content', '')} {m.get('category', '')}".lower()
+            if q in text:
+                hits.append(m)
+        return {"emotion": emotion, "results": hits[:limit]}
 
     async def _query_external(self, query: str) -> Dict[str, Any]:
         if not self.gemini or not query:

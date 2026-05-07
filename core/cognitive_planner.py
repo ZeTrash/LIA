@@ -41,6 +41,7 @@ class PlannerConfig:
     default_memory_limit: int = 5
     default_interactions_limit: int = 5
     default_memories_limit: int = 5
+    max_tool_calls: int = 5
     stop_words_lang: str = "fr"
 
 
@@ -99,6 +100,10 @@ class CognitivePlanner:
         
         logger.debug(f"🔍 [PLANNER] Analyse de la requête...")
         analysis = self._analyze_request(user_message)
+        needs_environment = self._needs_environment_request(user_message)
+        needs_objectives = self._needs_objectives_request(user_message)
+        needs_recent_episodes = self._needs_recent_episodes_request(user_message)
+        emotion_query = self._extract_emotion_query(user_message)
         logger.info(
             f"📊 [PLANNER] Analyse: complexité={analysis.complexity}, "
             f"needs_identity={analysis.needs_identity}, "
@@ -157,6 +162,9 @@ class CognitivePlanner:
                     default_limit = self.config.get("default_memory_limit", 5) if isinstance(self.config, dict) else getattr(self.config, "default_memory_limit", 5)
                     actions.append(Action(ActionType.CONSULT_MEMORY, {"limit": default_limit}, priority=priority))
                     priority += 1
+                elif action_type == ActionType.CONSULT_ENVIRONMENT:
+                    actions.append(Action(ActionType.CONSULT_ENVIRONMENT, {}, priority=priority))
+                    priority += 1
                 elif action_type == ActionType.CONSULT_INTERACTIONS:
                     default_limit = self.config.get("default_interactions_limit", 5) if isinstance(self.config, dict) else getattr(self.config, "default_interactions_limit", 5)
                     actions.append(Action(ActionType.CONSULT_INTERACTIONS, {"limit": default_limit}, priority=priority))
@@ -198,6 +206,27 @@ class CognitivePlanner:
                 actions.append(Action(ActionType.CONSULT_IDENTITY, {}, priority=priority))
                 priority += 1
                 logger.debug(f"  ➕ Action ajoutée: CONSULT_IDENTITY (priority: {priority-1})")
+
+            # 1.5) Environment / capabilities
+            if needs_environment:
+                actions.append(Action(ActionType.CONSULT_ENVIRONMENT, {}, priority=priority))
+                priority += 1
+                logger.debug(f"  ➕ Action ajoutée: CONSULT_ENVIRONMENT (priority: {priority-1})")
+
+            if needs_objectives:
+                actions.append(Action(ActionType.CONSULT_OBJECTIVES, {}, priority=priority))
+                priority += 1
+                logger.debug(f"  ➕ Action ajoutée: CONSULT_OBJECTIVES (priority: {priority-1})")
+
+            if needs_recent_episodes:
+                actions.append(Action(ActionType.CONSULT_RECENT_EPISODES, {"limit": 5}, priority=priority))
+                priority += 1
+                logger.debug(f"  ➕ Action ajoutée: CONSULT_RECENT_EPISODES (priority: {priority-1})")
+
+            if emotion_query:
+                actions.append(Action(ActionType.SEARCH_BY_EMOTION, {"emotion": emotion_query, "limit": 10}, priority=priority))
+                priority += 1
+                logger.debug(f"  ➕ Action ajoutée: SEARCH_BY_EMOTION (priority: {priority-1})")
 
             # 2) Memory related
             if analysis.needs_memory:
@@ -258,6 +287,23 @@ class CognitivePlanner:
             logger.info("🔧 [PLANNER] Ajout CONSULT_IDENTITY (besoin détecté, absent du pattern)")
             non_respond_actions.append(Action(ActionType.CONSULT_IDENTITY, {}, priority=0))
 
+        # 1.5) Environment required by request
+        if needs_environment and not any(a.type == ActionType.CONSULT_ENVIRONMENT for a in non_respond_actions):
+            logger.info("🔧 [PLANNER] Ajout CONSULT_ENVIRONMENT (besoin détecté, absent du pattern)")
+            non_respond_actions.append(Action(ActionType.CONSULT_ENVIRONMENT, {}, priority=0))
+
+        if needs_objectives and not any(a.type == ActionType.CONSULT_OBJECTIVES for a in non_respond_actions):
+            logger.info("🔧 [PLANNER] Ajout CONSULT_OBJECTIVES (besoin détecté, absent du pattern)")
+            non_respond_actions.append(Action(ActionType.CONSULT_OBJECTIVES, {}, priority=0))
+
+        if needs_recent_episodes and not any(a.type == ActionType.CONSULT_RECENT_EPISODES for a in non_respond_actions):
+            logger.info("🔧 [PLANNER] Ajout CONSULT_RECENT_EPISODES (besoin détecté, absent du pattern)")
+            non_respond_actions.append(Action(ActionType.CONSULT_RECENT_EPISODES, {"limit": 5}, priority=0))
+
+        if emotion_query and not any(a.type == ActionType.SEARCH_BY_EMOTION for a in non_respond_actions):
+            logger.info("🔧 [PLANNER] Ajout SEARCH_BY_EMOTION (besoin détecté, absent du pattern)")
+            non_respond_actions.append(Action(ActionType.SEARCH_BY_EMOTION, {"emotion": emotion_query, "limit": 10}, priority=0))
+
         # 2) Memory required by analysis
         if analysis.needs_memory and not any(
             a.type in (ActionType.CONSULT_MEMORY, ActionType.CONSULT_INTERACTIONS, ActionType.CONSULT_MEMORIES)
@@ -313,6 +359,8 @@ class CognitivePlanner:
 
         estimated_cost = self._estimate_cost(actions)
         confidence = self._estimate_confidence(analysis, actions)
+        if needs_environment and any(a.type == ActionType.CONSULT_ENVIRONMENT for a in actions):
+            confidence = min(1.0, confidence + 0.10)
         
         logger.info(f"📊 [PLANNER] Plan créé: {len(actions)} actions, coût={estimated_cost:.1f}, confiance={confidence:.2f}")
         
@@ -333,6 +381,10 @@ class CognitivePlanner:
                     minimal_actions.append(Action(ActionType.CONSULT_IDENTITY, {}, priority=priority))
                     priority += 1
                     logger.debug(f"  ➕ Action minimale: CONSULT_IDENTITY")
+                if needs_environment:
+                    minimal_actions.append(Action(ActionType.CONSULT_ENVIRONMENT, {}, priority=priority))
+                    priority += 1
+                    logger.debug(f"  ➕ Action minimale: CONSULT_ENVIRONMENT")
                 if analysis.needs_external:
                     minimal_actions.append(Action(ActionType.QUERY_EXTERNAL, {"query": user_message, "keywords": analysis.keywords}, priority=priority, required=False))
                     priority += 1
@@ -653,6 +705,80 @@ class CognitivePlanner:
             needs_external=needs_external,
             keywords=keywords,
         )
+
+    def _needs_environment_request(self, message: str) -> bool:
+        msg = message.lower().strip()
+        return any(
+            k in msg
+            for k in (
+                "environnement",
+                "environment",
+                "capacités",
+                "capacites",
+                "capabilities",
+                "que peux-tu faire",
+                "que peux tu faire",
+                "what can you do",
+                "local",
+                "système",
+                "systeme",
+                "system",
+            )
+        )
+
+    def _needs_objectives_request(self, message: str) -> bool:
+        msg = message.lower().strip()
+        return any(
+            k in msg
+            for k in (
+                "objectif",
+                "objectifs",
+                "goal",
+                "goals",
+                "priorité",
+                "priorite",
+                "ce que tu dois faire",
+            )
+        )
+
+    def _needs_recent_episodes_request(self, message: str) -> bool:
+        msg = message.lower().strip()
+        return any(
+            k in msg
+            for k in (
+                "épisodes récents",
+                "episodes recents",
+                "recent episodes",
+                "dernières interactions",
+                "dernieres interactions",
+                "dernier échange",
+                "dernier echange",
+            )
+        )
+
+    def _extract_emotion_query(self, message: str) -> Optional[str]:
+        msg = message.lower()
+        emotions = [
+            "joie",
+            "tristesse",
+            "colère",
+            "colere",
+            "peur",
+            "stress",
+            "anxieux",
+            "anxiété",
+            "anxiete",
+            "heureux",
+            "sad",
+            "happy",
+            "angry",
+            "fear",
+        ]
+        if "émotion" in msg or "emotion" in msg:
+            for e in emotions:
+                if e in msg:
+                    return e
+        return None
 
     def _extract_keywords(self, text: str) -> List[str]:
         # Tokenize words, keep basic letters/numbers, strip punctuation.
