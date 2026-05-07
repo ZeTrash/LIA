@@ -36,7 +36,7 @@ class CoreConfig:
     embedding_model: str = "nomic-ai/nomic-embed-text-v1.5"
     
     # Génération
-    max_length: int = 15360  # Qwen supporte jusqu'à 32K tokens, on limite à 512 pour commencer
+    max_length: int = 15360  # V2: budget par défaut aligné architecture MI300X
     temperature: float = 0.8  # Augmenté pour favoriser la créativité et l'expression de l'identité
     top_p: float = 0.95  # Augmenté pour plus de diversité dans les réponses
     top_k: int = 50  # Standard pour Qwen
@@ -58,7 +58,10 @@ class CoreConfig:
     # - "menu": boucle historique (menu -> choix -> exécution -> repeat)
     # - "auto_with_audit": planification+exécution autonome, avec traces compatibles
     # - "full_auto": identique à auto_with_audit côté runtime (réservé pour futures optimisations)
-    autonomy_mode: str = "menu"
+    autonomy_mode: str = "auto_with_audit"
+    router_confidence_threshold: float = 0.70
+    max_router_replans: int = 2
+    enable_menu_fallback: bool = True
     autonomy_min_plan_confidence: float = 0.55
     autonomy_require_execution_success: bool = True
     autonomy_max_replans: int = 1
@@ -67,9 +70,10 @@ class CoreConfig:
     max_tool_calls: int = 5
     enable_pattern_brain_remote: bool = True  # Utilise le service HTTP pattern_brain si disponible
     enable_pattern_brain_local_fallback: bool = True  # Fallback local via LLM principal
-    enable_code_brain: bool = False
-    enable_vision_brain: bool = False
+    enable_code_brain: bool = True
+    enable_vision_brain: bool = True
     enable_audio_brain: bool = False
+    enable_identity_brain: bool = True
     enable_self_improvement: bool = False
     sandbox_timeout_seconds: int = 60
     max_self_modifications_per_session: int = 3
@@ -112,12 +116,16 @@ class CoreConfig:
             "enable_real_brain_routing": self.enable_real_brain_routing,
             "router_min_confidence": self.router_min_confidence,
             "autonomy_mode": self.autonomy_mode,
+            "router_confidence_threshold": self.router_confidence_threshold,
+            "max_router_replans": self.max_router_replans,
+            "enable_menu_fallback": self.enable_menu_fallback,
             "max_tool_calls": self.max_tool_calls,
             "enable_pattern_brain_remote": self.enable_pattern_brain_remote,
             "enable_pattern_brain_local_fallback": self.enable_pattern_brain_local_fallback,
             "enable_code_brain": self.enable_code_brain,
             "enable_vision_brain": self.enable_vision_brain,
             "enable_audio_brain": self.enable_audio_brain,
+            "enable_identity_brain": self.enable_identity_brain,
             "enable_self_improvement": self.enable_self_improvement,
             "sandbox_timeout_seconds": self.sandbox_timeout_seconds,
             "max_self_modifications_per_session": self.max_self_modifications_per_session,

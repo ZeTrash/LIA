@@ -23,11 +23,20 @@ from core import CoreConfig
 from support import SupportChannel, SupportConfig, GeminiAdapter
 from memory_service import MemoryAdapter
 
+# Autonomie continue (runner)
+from autonomy import AutonomyRunner
+
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="LIA - Interface de Chat")
+
+# Defaults alignés sur docs/last_docs_update/LIA_ARCHITECTURE_V2.md
+DOC_DEFAULT_BACKEND = "vllm"
+DOC_DEFAULT_LANG_MODEL = "Qwen/Qwen2.5-72B-Instruct"
+DOC_DEFAULT_ROUTER_MODEL = "Qwen/Qwen2.5-1.5B-Instruct"
+DOC_DEFAULT_CODE_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 
 # Dossier pour les fichiers statiques
 static_dir = Path(__file__).parent / "static"
@@ -35,6 +44,7 @@ static_dir.mkdir(exist_ok=True)
 
 # Instance globale du canal utilisateur
 user_channel: Optional[UserChannel] = None
+autonomy_runner: Optional[AutonomyRunner] = None
 
 
 class ConnectionManager:
@@ -67,6 +77,26 @@ manager = ConnectionManager()
 
 PATTERN_BRAIN_BASE_URL = os.getenv("LIA_PATTERN_BRAIN_BASE_URL", "http://127.0.0.1:8002")
 PATTERN_BRAIN_HEALTH_URL = f"{PATTERN_BRAIN_BASE_URL}/health"
+SYSTEM_EVENTS_LOG_PATH = Path(__file__).parent.parent / "logs" / "lia_system_events.jsonl"
+
+def _autonomy_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "type": "autonomy_event",
+        "event": event,
+        "timestamp": event.get("timestamp") or datetime.now().isoformat(),
+    }
+
+
+async def _ensure_autonomy_runner() -> AutonomyRunner:
+    global autonomy_runner
+    if autonomy_runner is not None:
+        return autonomy_runner
+    # Diffuser les événements à toutes les sessions connectées
+    autonomy_runner = AutonomyRunner(
+        system_events_log_path=SYSTEM_EVENTS_LOG_PATH,
+        on_event=lambda ev: manager.broadcast(_autonomy_event_payload(ev)),
+    )
+    return autonomy_runner
 
 
 def start_pattern_brain_subprocess() -> None:
@@ -230,22 +260,44 @@ async def initialize_user_channel():
     
     try:
         # Configuration du noyau primaire
-        # Priorité: variables d'environnement (vLLM/transformers), puis fallback GGUF historique.
-        llm_backend = os.getenv("LIA_LLM_BACKEND", "auto").strip().lower()
-        llm_model_name = os.getenv("LIA_LLM_MODEL", "Qwen/Qwen2.5-72B-Instruct").strip()
-        llm_max_length = int(os.getenv("LIA_LLM_MAX_LENGTH", "512"))
+        # Par défaut: utiliser strictement les valeurs "doc V2".
+        # Les overrides d'environnement sont opt-in via LIA_USE_ENV_MODEL_OVERRIDES=1.
+        use_env_model_overrides = os.getenv("LIA_USE_ENV_MODEL_OVERRIDES", "0").strip().lower() in {"1", "true", "yes", "oui"}
+
+        llm_backend = DOC_DEFAULT_BACKEND
+        llm_model_name = DOC_DEFAULT_LANG_MODEL
+        llm_router_model = DOC_DEFAULT_ROUTER_MODEL
+        llm_lang_model = DOC_DEFAULT_LANG_MODEL
+        llm_code_model = DOC_DEFAULT_CODE_MODEL
+
+        if use_env_model_overrides:
+            llm_backend = os.getenv("LIA_LLM_BACKEND", llm_backend).strip().lower()
+            llm_model_name = os.getenv("LIA_LLM_MODEL", llm_model_name).strip()
+            llm_router_model = os.getenv("LIA_ROUTER_MODEL", llm_router_model).strip()
+            llm_lang_model = os.getenv("LIA_LANG_MODEL", llm_lang_model).strip()
+            llm_code_model = os.getenv("LIA_CODE_MODEL", llm_code_model).strip()
+            logger.info("ℹ️  Overrides modèles via env activés (LIA_USE_ENV_MODEL_OVERRIDES=1).")
+        else:
+            if any(
+                os.getenv(k)
+                for k in ("LIA_LLM_BACKEND", "LIA_LLM_MODEL", "LIA_ROUTER_MODEL", "LIA_LANG_MODEL", "LIA_CODE_MODEL")
+            ):
+                logger.warning(
+                    "⚠️  Variables LIA_*_MODEL détectées mais ignorées "
+                    "(utilisation des defaults doc V2). "
+                    "Définir LIA_USE_ENV_MODEL_OVERRIDES=1 pour les activer."
+                )
+
+        llm_max_length = int(os.getenv("LIA_LLM_MAX_LENGTH", "15360"))
         llm_temperature = float(os.getenv("LIA_LLM_TEMPERATURE", "0.8"))
         llm_vllm_max_len = int(os.getenv("LIA_VLLM_MAX_MODEL_LEN", "32768"))
         llm_vllm_dtype = os.getenv("LIA_VLLM_DTYPE", "float16").strip()
         llm_vllm_gpu_mem = float(os.getenv("LIA_VLLM_GPU_MEMORY_UTILIZATION", "0.8"))
-        llm_router_model = os.getenv("LIA_ROUTER_MODEL", "Qwen/Qwen2.5-1.5B-Instruct").strip()
-        llm_lang_model = os.getenv("LIA_LANG_MODEL", "Qwen/Qwen2.5-72B-Instruct").strip()
-        llm_code_model = os.getenv("LIA_CODE_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct").strip()
         llm_enable_self_improvement = os.getenv("LIA_ENABLE_SELF_IMPROVEMENT", "1").strip().lower() in {"1", "true", "yes", "oui"}
-        llm_autonomy_mode = os.getenv("LIA_AUTONOMY_MODE", "menu").strip().lower()
+        llm_autonomy_mode = os.getenv("LIA_AUTONOMY_MODE", "auto_with_audit").strip().lower()
         llm_autonomy_min_plan_conf = float(os.getenv("LIA_AUTONOMY_MIN_PLAN_CONFIDENCE", "0.55"))
         llm_autonomy_min_prompt_conf = float(os.getenv("LIA_AUTONOMY_MIN_PROMPT_CONFIDENCE", "0.55"))
-        llm_autonomy_max_replans = int(os.getenv("LIA_AUTONOMY_MAX_REPLANS", "1"))
+        llm_autonomy_max_replans = int(os.getenv("LIA_AUTONOMY_MAX_REPLANS", "2"))
         llm_autonomy_max_prompt_rebuilds = int(os.getenv("LIA_AUTONOMY_MAX_PROMPT_REBUILDS", "1"))
 
         use_env_backend = llm_backend in {"vllm", "transformers"}
@@ -416,6 +468,7 @@ async def startup_event():
     # Lancer le noyau subconscient (pattern-brain) en arrière-plan
     await ensure_pattern_brain_ready()
     await initialize_user_channel()
+    await _ensure_autonomy_runner()
 
 
 @app.get("/")
@@ -471,14 +524,162 @@ async def health_brains():
             "neural_router_enabled": bool(getattr(cfg, "enable_neural_router", False)),
             "real_brain_routing_enabled": bool(getattr(cfg, "enable_real_brain_routing", False)),
             "code_brain_enabled": bool(getattr(cfg, "enable_code_brain", False)),
+            "vision_brain_enabled": bool(getattr(cfg, "enable_vision_brain", False)),
+            "audio_brain_enabled": bool(getattr(cfg, "enable_audio_brain", False)),
             "router_brain_loaded": getattr(core, "router_brain_model", None) is not None,
             "code_brain_loaded": getattr(core, "code_brain", None) is not None,
+            "vision_brain_loaded": getattr(core, "vision_brain", None) is not None,
+            "audio_brain_loaded": getattr(core, "audio_brain", None) is not None,
+            "interoception_enabled": getattr(core, "interoception_brain", None) is not None,
         },
         "models": {
             "router_model": getattr(cfg, "router_model", None),
             "lang_model": getattr(cfg, "lang_model", None),
             "code_model": getattr(cfg, "code_model", None),
         },
+    }
+
+
+def _compute_runtime_kpis_from_events() -> Dict[str, Any]:
+    auto_count = 0
+    menu_count = 0
+    exchange_end_count = 0
+    self_mod_attempts = 0
+    self_mod_success = 0
+    if not SYSTEM_EVENTS_LOG_PATH.exists():
+        return {
+            "auto_path_rate": 0.0,
+            "menu_fallback_rate": 0.0,
+            "self_mod_accept_rate": 0.0,
+            "events_processed": 0,
+        }
+    try:
+        with SYSTEM_EVENTS_LOG_PATH.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    evt = json.loads(line)
+                except Exception:
+                    continue
+                name = str(evt.get("event", ""))
+                payload = evt.get("payload", {}) or {}
+                if name == "exchange_end":
+                    exchange_end_count += 1
+                    stop_reason = str(payload.get("stop_reason", ""))
+                    if stop_reason == "auto_plan":
+                        auto_count += 1
+                    else:
+                        menu_count += 1
+                if name in {
+                    "self_improvement_sandbox_result",
+                    "self_improvement_applied",
+                    "self_improvement_applied_after_approval",
+                }:
+                    self_mod_attempts += 1
+                if name in {"self_improvement_applied", "self_improvement_applied_after_approval"}:
+                    self_mod_success += 1
+    except Exception:
+        return {
+            "auto_path_rate": 0.0,
+            "menu_fallback_rate": 0.0,
+            "self_mod_accept_rate": 0.0,
+            "events_processed": 0,
+        }
+    auto_rate = (auto_count / exchange_end_count) if exchange_end_count else 0.0
+    menu_rate = (menu_count / exchange_end_count) if exchange_end_count else 0.0
+    self_mod_rate = (self_mod_success / self_mod_attempts) if self_mod_attempts else 0.0
+    return {
+        "auto_path_rate": round(auto_rate, 4),
+        "menu_fallback_rate": round(menu_rate, 4),
+        "self_mod_accept_rate": round(self_mod_rate, 4),
+        "events_processed": exchange_end_count,
+    }
+
+
+@app.get("/health/interoception")
+async def health_interoception():
+    """Expose un rapport health interne de type InteroceptionBrain."""
+    core = await _get_core_adapter()
+    intero = getattr(core, "interoception_brain", None)
+    if intero is None:
+        raise HTTPException(status_code=503, detail="InteroceptionBrain indisponible")
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "interoception": intero.get_health_report(),
+    }
+
+
+@app.get("/health/kpis")
+async def health_kpis():
+    """Expose des KPIs V2 d'autonomie/fallback basés sur les événements."""
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "kpis": _compute_runtime_kpis_from_events(),
+    }
+
+
+@app.get("/autonomy/status")
+async def autonomy_status():
+    """Retourne l'état du runner d'autonomie continue."""
+    runner = await _ensure_autonomy_runner()
+    st = runner.status()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "autonomy": st.__dict__,
+    }
+
+
+@app.post("/autonomy/start")
+async def autonomy_start(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Démarre la boucle autonome."""
+    runner = await _ensure_autonomy_runner()
+    await initialize_user_channel()
+
+    objective = str(payload.get("objective") or "").strip()
+    interval_s = float(payload.get("interval_s") or 5.0)
+    max_steps = int(payload.get("max_steps") or 50)
+
+    async def _tick_fn(run_id: str, step: int, prompt: str) -> Dict[str, Any]:
+        assert user_channel is not None
+        session_id = f"{run_id}"
+
+        # Utiliser le mode structured pour récupérer (optionnellement) une trace; on garde la réponse.
+        result = await user_channel.send_message_structured(
+            message=prompt,
+            session_id=session_id,
+            use_autonomy=True,
+        )
+        # Payload compact (évite d'envoyer toute la trace à chaque tick)
+        return {
+            "run_id": run_id,
+            "step": step,
+            "lia_response": result.get("lia_response", "") or "",
+            "success": bool(result.get("success", True)),
+        }
+
+    st = await runner.start(objective=objective, tick_fn=_tick_fn, interval_s=interval_s, max_steps=max_steps)
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "autonomy": st.__dict__,
+    }
+
+
+@app.post("/autonomy/stop")
+async def autonomy_stop(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Stoppe la boucle autonome."""
+    runner = await _ensure_autonomy_runner()
+    reason = str(payload.get("reason") or "stopped_by_user")
+    st = await runner.stop(reason=reason)
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "autonomy": st.__dict__,
     }
 
 
@@ -521,6 +722,41 @@ async def reject_self_improvement(payload: Dict[str, Any] = Body(default_factory
     if not hasattr(core, "reject_pending_self_modification"):
         raise HTTPException(status_code=400, detail="Self-improvement non disponible")
     result = core.reject_pending_self_modification(reason=reason, session_id=session_id)
+    await _emit_self_mod_pending_changed()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "result": result,
+    }
+
+
+@app.post("/self-improvement/rollback")
+async def rollback_self_improvement(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Rollback la dernière auto-modification appliquée."""
+    core = await _get_core_adapter()
+    session_id = payload.get("session_id")
+    if not hasattr(core, "rollback_last_self_modification"):
+        raise HTTPException(status_code=400, detail="Rollback self-improvement non disponible")
+    result = core.rollback_last_self_modification(session_id=session_id)
+    await _emit_self_mod_pending_changed()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "result": result,
+    }
+
+
+@app.post("/self-improvement/rollback-version")
+async def rollback_self_improvement_version(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """Rollback vers une version sauvegardée (version_id)."""
+    core = await _get_core_adapter()
+    session_id = payload.get("session_id")
+    version_id = payload.get("version_id")
+    if not version_id:
+        raise HTTPException(status_code=400, detail="version_id requis")
+    if not hasattr(core, "rollback_self_modification_version"):
+        raise HTTPException(status_code=400, detail="Rollback versionné non disponible")
+    result = core.rollback_self_modification_version(version_id=str(version_id), session_id=session_id)
     await _emit_self_mod_pending_changed()
     return {
         "status": "ok",

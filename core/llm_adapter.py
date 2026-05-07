@@ -49,12 +49,42 @@ except ImportError:
     CODE_BRAIN_AVAILABLE = False
 
 try:
+    from .vision_brain import VisionBrain
+    VISION_BRAIN_AVAILABLE = True
+except ImportError:
+    VISION_BRAIN_AVAILABLE = False
+
+try:
+    from .audio_brain import AudioBrain
+    AUDIO_BRAIN_AVAILABLE = True
+except ImportError:
+    AUDIO_BRAIN_AVAILABLE = False
+
+try:
+    from .identity_brain import IdentityBrain
+    IDENTITY_BRAIN_AVAILABLE = True
+except ImportError:
+    IDENTITY_BRAIN_AVAILABLE = False
+
+try:
     from .architecture_graph import ArchitectureGraph, SelfModification
     from .self_coding_sandbox import SelfCodingSandbox
     from .self_improvement_evaluator import SelfImprovementEvaluator, BenchmarkResult
     SELF_IMPROVEMENT_AVAILABLE = True
 except ImportError:
     SELF_IMPROVEMENT_AVAILABLE = False
+
+try:
+    from .interoception_brain import InteroceptionBrain
+    INTEROCEPTION_AVAILABLE = True
+except ImportError:
+    INTEROCEPTION_AVAILABLE = False
+
+try:
+    from .memory_brain import MemoryBrain
+    MEMORY_BRAIN_AVAILABLE = True
+except ImportError:
+    MEMORY_BRAIN_AVAILABLE = False
 
 if TYPE_CHECKING:
     # Pour les annotations de type sans import circulaire
@@ -183,11 +213,17 @@ class LLMAdapter:
         self.neural_router = None
         self.router_brain_model = None
         self.code_brain = None
+        self.vision_brain = None
+        self.audio_brain = None
+        self.identity_brain = None
         self.architecture_graph = None
         self.self_coding_sandbox = None
         self.self_improvement_evaluator = None
         self.self_modifications_count = 0
         self._pending_self_mod: Optional[Dict[str, str]] = None
+        self._last_applied_self_mod: Optional[Dict[str, str]] = None
+        self.interoception_brain = InteroceptionBrain() if INTEROCEPTION_AVAILABLE else None
+        self.memory_brain = None
         # Dernière trace structurée (processus + réponse), pour interfaces avancées
         self._last_trace_chunks: List["ResponseChunk"] = []
         
@@ -244,10 +280,50 @@ class LLMAdapter:
             else:
                 logger.warning("⚠️  CodeBrain demandé mais module indisponible")
 
+        if getattr(self.config, "enable_vision_brain", False):
+            if VISION_BRAIN_AVAILABLE:
+                try:
+                    self.vision_brain = VisionBrain(model_name=self.config.vision_model)
+                    logger.info("✅ VisionBrain MVP activé (%s)", self.config.vision_model)
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser VisionBrain: {e}")
+            else:
+                logger.warning("⚠️  VisionBrain demandé mais module indisponible")
+
+        if getattr(self.config, "enable_audio_brain", False):
+            if AUDIO_BRAIN_AVAILABLE:
+                try:
+                    self.audio_brain = AudioBrain(
+                        stt_model=self.config.audio_stt_model,
+                        tts_model=self.config.audio_tts_model,
+                    )
+                    logger.info(
+                        "✅ AudioBrain MVP activé (stt=%s, tts=%s)",
+                        self.config.audio_stt_model,
+                        self.config.audio_tts_model,
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser AudioBrain: {e}")
+            else:
+                logger.warning("⚠️  AudioBrain demandé mais module indisponible")
+
+        if getattr(self.config, "enable_identity_brain", False):
+            if IDENTITY_BRAIN_AVAILABLE:
+                try:
+                    self.identity_brain = IdentityBrain(memory_adapter=self.memory)
+                    logger.info("✅ IdentityBrain MVP activé")
+                except Exception as e:
+                    logger.warning(f"⚠️  Impossible d'initialiser IdentityBrain: {e}")
+            else:
+                logger.warning("⚠️  IdentityBrain demandé mais module indisponible")
+
         if getattr(self.config, "enable_self_improvement", False):
             if SELF_IMPROVEMENT_AVAILABLE:
                 try:
-                    self.architecture_graph = ArchitectureGraph.default_v2()
+                    arch_log_path = Path(__file__).resolve().parents[1] / "logs" / "architecture_changelog.jsonl"
+                    self.architecture_graph = ArchitectureGraph.default_v2(
+                        changelog_path=str(arch_log_path)
+                    )
                     self.self_coding_sandbox = SelfCodingSandbox(
                         repo_root=str(Path(__file__).resolve().parents[1]),
                         timeout_seconds=self.config.sandbox_timeout_seconds,
@@ -298,6 +374,17 @@ class LLMAdapter:
                 logger.info("✅ Conscience environnementale initialisée")
             except Exception as e:
                 logger.warning(f"⚠️  Impossible d'initialiser la conscience environnementale: {e}")
+
+        # MemoryBrain V2 façade (peut être re-lié après init planner)
+        if MEMORY_BRAIN_AVAILABLE:
+            try:
+                self.memory_brain = MemoryBrain(
+                    memory_adapter=self.memory,
+                    pattern_learner=self.pattern_learner,
+                    architecture_graph=self.architecture_graph,
+                )
+            except Exception as e:
+                logger.debug(f"MemoryBrain init skipped: {e}")
         
         # Initialiser le gestionnaire d'actions autonomes
         # Préférer support_channel si fourni, sinon utiliser gemini_adapter
@@ -363,6 +450,8 @@ class LLMAdapter:
                     except Exception as e:
                         logger.warning(f"⚠️  PatternLearner non disponible: {e}")
                         self.pattern_learner = None
+                if self.memory_brain is not None:
+                    self.memory_brain.pattern_learner = self.pattern_learner
                 
                 # Configuration du planificateur
                 planner_config = {
@@ -524,7 +613,20 @@ class LLMAdapter:
         match = re.search(r"([a-zA-Z0-9_/\-]+\.py)", message or "")
         if not match:
             return "core/config.py"
-        return match.group(1).lstrip("./")
+        raw = match.group(1).lstrip("./")
+
+        # Normalisation: certains appels utilisateurs préfixent à tort par "core/".
+        # Ex: "core/web_interface/app_chat.py" doit pointer vers "web_interface/app_chat.py".
+        try:
+            repo_root = Path(__file__).resolve().parents[1]
+            if raw.startswith("core/"):
+                candidate = raw[len("core/") :]
+                if (repo_root / candidate).exists():
+                    return candidate
+        except Exception:
+            pass
+
+        return raw
 
     def _is_self_modification_target_allowed(self, target_module: str) -> bool:
         blocked_prefixes = ("core/cognitive_safeguards.py", "core/self_coding_sandbox.py")
@@ -634,6 +736,7 @@ class LLMAdapter:
             self._pending_self_mod = {
                 "target_module": target_module,
                 "proposed_code": proposed_code,
+                "previous_code": current_code,
             }
             if self.architecture_graph is not None:
                 self.architecture_graph.log_modification(
@@ -651,6 +754,11 @@ class LLMAdapter:
 
         target_path.write_text(proposed_code, encoding="utf-8")
         self.self_modifications_count += 1
+        self._last_applied_self_mod = {
+            "target_module": target_module,
+            "previous_code": current_code,
+            "applied_code": proposed_code,
+        }
         if self.architecture_graph is not None:
             self.architecture_graph.log_modification(
                 SelfModification(
@@ -671,6 +779,7 @@ class LLMAdapter:
             return "Aucune auto-modification en attente."
         target_module = self._pending_self_mod["target_module"]
         proposed_code = self._pending_self_mod["proposed_code"]
+        previous_code = self._pending_self_mod.get("previous_code", "")
         target_path = Path(__file__).resolve().parents[1] / target_module
         if not target_path.exists():
             self._pending_self_mod = None
@@ -678,6 +787,11 @@ class LLMAdapter:
 
         target_path.write_text(proposed_code, encoding="utf-8")
         self.self_modifications_count += 1
+        self._last_applied_self_mod = {
+            "target_module": target_module,
+            "previous_code": previous_code,
+            "applied_code": proposed_code,
+        }
         self._pending_self_mod = None
         if self.architecture_graph is not None:
             self.architecture_graph.log_modification(
@@ -699,6 +813,7 @@ class LLMAdapter:
         return {
             "target_module": self._pending_self_mod.get("target_module"),
             "has_proposal": bool(self._pending_self_mod.get("proposed_code")),
+            "has_backup": bool(self._pending_self_mod.get("previous_code")),
         }
 
     def approve_pending_self_modification(self, session_id: Optional[str] = None) -> str:
@@ -726,6 +841,59 @@ class LLMAdapter:
                 )
             )
         return f"Auto-modification rejetée pour `{target_module}`."
+
+    def rollback_last_self_modification(self, session_id: Optional[str] = None) -> str:
+        """Rollback best-effort de la dernière auto-modification appliquée."""
+        if not self._last_applied_self_mod:
+            return "Aucune auto-modification appliquée à annuler."
+        target_module = self._last_applied_self_mod.get("target_module")
+        previous_code = self._last_applied_self_mod.get("previous_code", "")
+        if not target_module:
+            return "Rollback impossible: module cible absent."
+        target_path = Path(__file__).resolve().parents[1] / str(target_module)
+        if not target_path.exists():
+            return f"Rollback impossible: module introuvable `{target_module}`."
+        try:
+            if self.self_coding_sandbox:
+                self.self_coding_sandbox.rollback(str(target_module), previous_code)
+            else:
+                target_path.write_text(previous_code, encoding="utf-8")
+            self._log_system_event(
+                "self_improvement_rollback",
+                session_id,
+                {"target_module": target_module, "success": True},
+            )
+            if self.architecture_graph is not None:
+                self.architecture_graph.log_modification(
+                    SelfModification(
+                        target_module=str(target_module),
+                        summary="rollback_last_self_modification",
+                    )
+                )
+            return f"Rollback appliqué sur `{target_module}`."
+        except Exception as e:
+            self._log_system_event(
+                "self_improvement_rollback",
+                session_id,
+                {"target_module": target_module, "success": False, "error": str(e)},
+            )
+            return f"Rollback échoué sur `{target_module}`: {e}"
+
+    def rollback_self_modification_version(self, version_id: str, session_id: Optional[str] = None) -> str:
+        """Rollback vers une version sauvegardée par le sandbox."""
+        if not self.self_coding_sandbox or not hasattr(self.self_coding_sandbox, "rollback_to_version"):
+            return "Rollback par version indisponible (sandbox)."
+        ok = False
+        try:
+            ok = bool(self.self_coding_sandbox.rollback_to_version(version_id))
+        except Exception as e:
+            return f"Rollback par version échoué: {e}"
+        self._log_system_event(
+            "self_improvement_rollback_version",
+            session_id,
+            {"version_id": version_id, "success": ok},
+        )
+        return "Rollback par version appliqué." if ok else "Rollback par version impossible (version introuvable)."
     
     def _detect_device(self) -> str:
         """Détecte le device (GPU/CPU)."""
@@ -796,6 +964,14 @@ class LLMAdapter:
                 return str(model_path)
             else:
                 logger.warning(f"Chemin local {model_path} n'existe pas, téléchargement depuis HuggingFace")
+                # En tests, éviter de retomber sur un très gros modèle si le .gguf local est absent.
+                if os.environ.get("PYTEST_CURRENT_TEST"):
+                    test_fallback_model = os.environ.get(
+                        "LIA_TEST_FALLBACK_MODEL",
+                        "Qwen/Qwen2.5-1.5B-Instruct",
+                    )
+                    logger.info("Mode test détecté, fallback modèle: %s", test_fallback_model)
+                    return test_fallback_model
         
         # Vérifier si le modèle existe dans le dossier local_models_dir
         local_models_dir = Path(self.config.local_models_dir)
@@ -806,7 +982,10 @@ class LLMAdapter:
                 return str(model_local_path)
         
         # Sinon, utiliser le nom du modèle (sera téléchargé depuis HuggingFace)
-        logger.info(f"Téléchargement du modèle depuis HuggingFace: {self.config.model_name}")
+        logger.info(
+            "Résolution du modèle HuggingFace (cache prioritaire) : %s",
+            self.config.model_name,
+        )
         return self.config.model_name
     
     def _find_gguf_model(self) -> Optional[str]:
@@ -1941,8 +2120,24 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         import time
         start_time = time.time()
         planning_start = time.time()
+        # Compat tests: certaines fixtures construisent l'instance sans __init__ complet.
+        if not hasattr(self, "interoception_brain"):
+            self.interoception_brain = None
+        if not hasattr(self, "identity_brain"):
+            self.identity_brain = None
+        if not hasattr(self, "vision_brain"):
+            self.vision_brain = None
+        if not hasattr(self, "audio_brain"):
+            self.audio_brain = None
+        if not hasattr(self, "code_brain"):
+            self.code_brain = None
         
         try:
+            if self.interoception_brain is not None:
+                try:
+                    self.interoception_brain.inc_queue_depth()
+                except Exception:
+                    pass
             # 1-2. Planifier + exécuter
             # Mode "menu" (par défaut) : boucle cognitive "menu -> choix (LLM) -> exécution -> repeat" jusqu'à RESPOND
             plan = None
@@ -1971,6 +2166,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
 
             # V2: NeuralRouter (classification d'intention + plan de dispatch)
             selected_primary_brain = "lang"
+            dispatch_plan = None
             if self.neural_router:
                 try:
                     # LLM-first: on tente d'abord une classification via router_model.
@@ -1987,8 +2183,10 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                             from .neural_router import BrainType
 
                             mapped = BrainType[model_label]
+                            preserve_self_improve = getattr(heuristic_intent.brain, "value", "") == "self_improve"
+                            primary_brain = heuristic_intent.brain if preserve_self_improve else mapped
                             intent = type(heuristic_intent)(
-                                brain=mapped,
+                                brain=primary_brain,
                                 sub_tasks=heuristic_intent.sub_tasks,
                                 priority=heuristic_intent.priority,
                                 multi_brain=True,
@@ -2037,6 +2235,54 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     )
                 except Exception as e:
                     logger.warning(f"⚠️  [NEURAL_ROUTER] Erreur de routing ignorée: {e}")
+
+            # V2: exécuter les brains secondaires en parallèle (MVP)
+            # Objectif: enrichir le contexte (identity/system/memory...) sans refonte du planner.
+            if dispatch_plan is not None and getattr(dispatch_plan, "parallel_brains", None):
+                parallel = [b.value for b in (dispatch_plan.parallel_brains or [])]
+                async def _run_parallel(brain_name: str) -> Dict[str, Any]:
+                    try:
+                        if brain_name == "identity" and self.identity_brain is not None:
+                            return {"brain": brain_name, "result": self.identity_brain.get_identity_context()}
+                        if brain_name == "system":
+                            if self.interoception_brain is not None:
+                                return {"brain": brain_name, "result": self.interoception_brain.get_health_report()}
+                            return {"brain": brain_name, "result": {"available": False}}
+                        if brain_name == "memory" and self.memory is not None:
+                            ctx = self.memory.get_context(limit_traits=0, limit_memories=3, limit_interactions=2) or {}
+                            return {"brain": brain_name, "result": {"memories": ctx.get("memories") or [], "recent_interactions": ctx.get("recent_interactions") or []}}
+                        return {"brain": brain_name, "result": {"available": False}}
+                    except Exception as pe:
+                        return {"brain": brain_name, "result": {"available": False, "error": str(pe)}}
+
+                try:
+                    import asyncio as _asyncio
+                    results = await _asyncio.gather(*[_run_parallel(bn) for bn in parallel])
+                    execution_results["_parallel_brains"] = {r["brain"]: r["result"] for r in results if isinstance(r, dict) and r.get("brain")}
+                except Exception as e:
+                    logger.debug(f"Parallel brains skipped: {e}")
+
+            if selected_primary_brain == "self_improve":
+                response = await self._run_self_improvement_cycle(message, session_id)
+                self._last_trace_chunks = trace_chunks
+                self._log_system_event(
+                    "exchange_end",
+                    session_id,
+                    {
+                        "message": message,
+                        "response": response,
+                        "actions": "self_improve",
+                        "stop_reason": "self_improve_router_path",
+                        "process_chunks": [c.content for c in trace_chunks if c.type.value == "process"],
+                    },
+                )
+                if self.interoception_brain is not None:
+                    self.interoception_brain.record_request(
+                        latency_ms=(time.time() - start_time) * 1000.0,
+                        success=True,
+                    )
+                    self.interoception_brain.set_module_health("self_improvement", "ok")
+                return response
 
             # Bounds:
             # - Hard limit comes from safeguards (anti-loop)
@@ -3212,6 +3458,22 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                             if content:
                                 context_parts.append(f"- {content[:150]}...")
 
+                # Brains secondaires (V2, dispatch parallèle)
+                pb = execution_results.get("_parallel_brains")
+                if isinstance(pb, dict) and pb:
+                    try:
+                        ident = pb.get("identity") or {}
+                        if isinstance(ident, dict) and ident.get("identity"):
+                            context_parts.append("Identité (IdentityBrain):")
+                            context_parts.append(str(ident.get("identity"))[:400])
+                        sysr = pb.get("system") or {}
+                        if isinstance(sysr, dict) and sysr.get("request_count_window") is not None:
+                            context_parts.append(
+                                f"Système (InteroceptionBrain): avg_latency_ms={sysr.get('avg_latency_ms')}, success_rate={sysr.get('success_rate')}"
+                            )
+                    except Exception:
+                        pass
+
                 # Fallback générique: si d'autres résultats sont présents, les exposer de façon compacte.
                 # Cela garantit que même si la structure change (ou si une action n'est pas explicitement gérée),
                 # le modèle voit quand même quelque chose.
@@ -3231,6 +3493,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     "_theme_pattern",
                     "_prompt_brain",
                     "_final_prompt_override",
+                    "_brain_outputs",
                 }
                 for k, v in execution_results.items():
                     if k in known_keys:
@@ -3247,6 +3510,23 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                         context_parts.append(f"Résultat {k}: {text}")
                     except Exception:
                         continue
+
+                bo = execution_results.get("_brain_outputs")
+                if isinstance(bo, dict) and bo:
+                    try:
+                        context_parts.append("Sorties des modules (brains):")
+                        for bk, bv in bo.items():
+                            s = bv
+                            if isinstance(bv, (dict, list)):
+                                s = _json.dumps(bv, ensure_ascii=False)
+                            s = str(s).strip()
+                            if not s:
+                                continue
+                            if len(s) > 300:
+                                s = s[:300] + "..."
+                            context_parts.append(f"- {bk}: {s}")
+                    except Exception:
+                        pass
             
             if context_parts:
                 final_prompt_parts.append("=== INFORMATIONS CONSULTÉES ===")
@@ -3323,13 +3603,80 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 temperature_override = None
                 top_p_override = None
                 max_tokens_override = None
-            if selected_primary_brain == "code" and self.code_brain is not None:
+
+            # V2: collecter les sorties des brains et agréger via LangBrain si nécessaire.
+            brain_outputs: Dict[str, Any] = {}
+            parallel_ctx = execution_results.get("_parallel_brains") if isinstance(execution_results, dict) else None
+            has_parallel = isinstance(parallel_ctx, dict) and bool(parallel_ctx)
+            force_lang_aggregation = has_parallel and selected_primary_brain != "lang"
+            response = None
+
+            # Throttling (InteroceptionBrain)
+            throttling = None
+            if self.interoception_brain is not None:
+                try:
+                    throttling = self.interoception_brain.should_throttle()
+                except Exception:
+                    throttling = None
+            if throttling and throttling.get("throttled") and isinstance(max_tokens_override, int):
+                try:
+                    max_tokens_override = max(32, int(max_tokens_override * float(throttling.get("max_tokens_factor", 1.0))))
+                except Exception:
+                    pass
+
+            if selected_primary_brain == "vision" and self.vision_brain is not None:
+                self._log_system_event(
+                    "brain_selected",
+                    session_id,
+                    {"brain": "vision", "model": self.config.vision_model},
+                )
+                brain_outputs["vision"] = self.vision_brain.analyze(message=message, context=final_prompt)
+                if force_lang_aggregation:
+                    selected_primary_brain = "lang"
+                else:
+                    response = self._clean_response(str(brain_outputs["vision"]), message, concision_profile)
+            elif selected_primary_brain == "audio" and self.audio_brain is not None:
+                self._log_system_event(
+                    "brain_selected",
+                    session_id,
+                    {
+                        "brain": "audio",
+                        "stt_model": self.config.audio_stt_model,
+                        "tts_model": self.config.audio_tts_model,
+                    },
+                )
+                brain_outputs["audio"] = self.audio_brain.process(message=message)
+                if force_lang_aggregation:
+                    selected_primary_brain = "lang"
+                else:
+                    response = self._clean_response(str(brain_outputs["audio"]), message, concision_profile)
+            elif selected_primary_brain == "system":
+                self._log_system_event(
+                    "brain_selected",
+                    session_id,
+                    {"brain": "system", "model": "interoception"},
+                )
+                if self.interoception_brain is not None:
+                    health = self.interoception_brain.get_health_report()
+                    brain_outputs["system"] = (
+                        "État système (InteroceptionBrain MVP): "
+                        f"latence_moyenne={health.get('avg_latency_ms')} ms, "
+                        f"success_rate={health.get('success_rate')}, "
+                        f"window={health.get('request_count_window')}."
+                    )
+                else:
+                    brain_outputs["system"] = "InteroceptionBrain indisponible sur cette instance."
+                if force_lang_aggregation:
+                    selected_primary_brain = "lang"
+                else:
+                    response = self._clean_response(str(brain_outputs["system"]), message, concision_profile)
+            elif selected_primary_brain == "code" and self.code_brain is not None:
                 self._log_system_event(
                     "brain_selected",
                     session_id,
                     {"brain": "code", "model": self.config.code_model},
                 )
-                response = self.code_brain.generate(
+                brain_outputs["code"] = self.code_brain.generate(
                     final_prompt,
                     max_tokens=int(max_tokens_override) if isinstance(max_tokens_override, int) else self.config.max_length,
                     temperature=float(temperature_override) if isinstance(temperature_override, (int, float)) else min(0.4, self.config.temperature),
@@ -3337,11 +3684,14 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     top_k=self.config.top_k,
                     repetition_penalty=self.config.repetition_penalty,
                 )
-                response = self._clean_response(response, message, concision_profile)
-            elif use_gguf:
+                if force_lang_aggregation:
+                    selected_primary_brain = "lang"
+                else:
+                    response = self._clean_response(str(brain_outputs["code"]), message, concision_profile)
+            elif response is None and use_gguf:
                 response = self._generate_gguf(final_prompt)
                 response = self._clean_response(response, message, concision_profile)
-            elif use_vllm:
+            elif response is None and use_vllm:
                 self._log_system_event(
                     "brain_selected",
                     session_id,
@@ -3365,7 +3715,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     self.config.top_p = old_top_p
                     self.config.max_length = old_max_len
                 response = self._clean_response(response, message, concision_profile)
-            else:
+            elif response is None:
                 import torch
                 if not self.tokenizer:
                     raise RuntimeError("Tokenizer non chargé")
@@ -3403,6 +3753,10 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 response = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
                 response = self._clean_response(response, message, concision_profile)
 
+            # Si on a des sorties de brains non-lang et qu'on agrège via LangBrain, injecter dans le contexte.
+            if brain_outputs and selected_primary_brain == "lang":
+                execution_results["_brain_outputs"] = brain_outputs
+
             # Filet de sécurité production: ne jamais sortir une réponse vide.
             if not (response or "").strip():
                 logger.warning(
@@ -3410,6 +3764,16 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     "Activation du fallback de stabilité."
                 )
                 response = self._build_safe_fallback_response(message)
+
+            # IdentityBrain: validation légère de la sortie finale (V2 MVP)
+            if self.identity_brain is not None:
+                try:
+                    verdict = self.identity_brain.validate_response(response)
+                    if not getattr(verdict, "is_valid", True):
+                        logger.warning("⚠️  [IDENTITY] Réponse invalide, fallback stabilité. issues=%s", getattr(verdict, "issues", []))
+                        response = self._build_safe_fallback_response(message)
+                except Exception:
+                    pass
 
             # Ajouter le chunk de réponse finale à la trace
             final_chunk = ResponseChunk(
@@ -3617,6 +3981,12 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 session_id,
                 {"message": message, "response": response, "mode": "internal"},
             )
+            if self.interoception_brain is not None:
+                self.interoception_brain.record_request(
+                    latency_ms=(time.time() - start_time) * 1000.0,
+                    success=True,
+                )
+                self.interoception_brain.set_module_health("planner", "ok")
             return response
             
         except Exception as e:
@@ -3627,8 +3997,20 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                 session_id,
                 {"message": message, "error": str(e), "mode": "planner"},
             )
+            if self.interoception_brain is not None:
+                self.interoception_brain.record_request(
+                    latency_ms=(time.time() - start_time) * 1000.0,
+                    success=False,
+                )
+                self.interoception_brain.set_module_health("planner", "degraded", str(e))
             # PAS DE FALLBACK - lever l'exception pour voir les erreurs
             raise RuntimeError(error_msg) from e
+        finally:
+            if self.interoception_brain is not None:
+                try:
+                    self.interoception_brain.dec_queue_depth()
+                except Exception:
+                    pass
     
     async def _generate_internal(
         self,
@@ -4158,6 +4540,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         if self.backend_type == "transformers" and self.model is not None and self.tokenizer is not None:
             try:
                 import torch
+                from transformers import GenerationConfig
 
                 encoded = self.tokenizer(
                     prompt,
@@ -4172,16 +4555,19 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     attention_mask = attention_mask.to(self.device)
 
                 with torch.no_grad():
+                    router_generation_config = GenerationConfig(
+                        do_sample=False,
+                        temperature=1.0,
+                        top_p=1.0,
+                        top_k=50,
+                        pad_token_id=self.tokenizer.pad_token_id,
+                        eos_token_id=self.tokenizer.eos_token_id,
+                    )
                     outputs = self.model.generate(
                         input_ids,
                         attention_mask=attention_mask,
                         max_length=input_ids.shape[1] + 4,
-                        do_sample=False,
-                        temperature=0.0,
-                        top_p=1.0,
-                        top_k=1,
-                        pad_token_id=self.tokenizer.pad_token_id,
-                        eos_token_id=self.tokenizer.eos_token_id,
+                        generation_config=router_generation_config,
                     )
                 generated_ids = outputs[0][input_ids.shape[1]:]
                 raw = self.tokenizer.decode(generated_ids, skip_special_tokens=True)
@@ -5140,6 +5526,7 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
             "system": ["consult_environment", "consult_memory", "respond"],
             "memory": ["consult_memory", "search_memory", "respond"],
             "code": ["consult_request", "consult_environment", "respond"],
+            "self_improve": ["consult_request", "consult_environment", "respond"],
             "vision": ["consult_environment", "consult_request", "respond"],
             "audio": ["consult_environment", "consult_request", "respond"],
             "lang": ["consult_request", "respond"],

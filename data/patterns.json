@@ -1,6 +1,6 @@
 {
-  "version": "1.0",
-  "last_updated": "2026-02-16T21:19:50.283483+00:00",
+  "version": "1.1",
+  "last_updated": "2026-05-07T17:21:29.227975+00:00",
   "patterns": [
     {
       "id": "330adb53403a",
@@ -28,10 +28,43 @@
         "simple"
       ],
       "success_rate": 1.0,
-      "avg_quality_score": 0.7999999999999999,
-      "avg_execution_time": 3.5490308489118305e-05,
-      "usage_count": 7,
-      "last_used": "2026-02-16T21:19:50.283435+00:00"
+      "avg_quality_score": 0.8000000000000005,
+      "avg_execution_time": 2.9425467214276714e-05,
+      "usage_count": 31,
+      "last_used": "2026-05-07T17:21:29.227954+00:00"
     }
-  ]
+  ],
+  "meta": {
+    "iteration_policy": {
+      "simple": {
+        "history_steps": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "last_updated": "2026-05-07T17:21:29.227945+00:00"
+      }
+    }
+  }
 }

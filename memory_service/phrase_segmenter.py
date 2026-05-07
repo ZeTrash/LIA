@@ -118,74 +118,50 @@ class PhraseSegmenter:
         - Points de suspension
         """
         phrases = []
-        
-        # Pattern amélioré : cherche ponctuation suivie d'espace et majuscule (au moins 2 caractères)
-        # ou ponctuation en fin de texte
-        # Exclut les cas où une seule lettre majuscule suit (comme "J" seul)
-        pattern = r'([.!?]+)\s+([A-Z][a-zA-Z]{1,})|([.!?]+)$'
-        
-        # Trouver toutes les positions de fin de phrase
-        matches = list(re.finditer(pattern, text))
-        
-        if not matches:
-            # Si aucune ponctuation trouvée, considérer tout le texte comme une phrase
-            if len(text.strip()) >= self.min_length:
-                phrases.append(Phrase(
-                    text=text.strip(),
+
+        # Découpe robuste: séparation dès qu'on voit une fin de phrase ponctuée.
+        chunks = re.split(r'(?<=[.!?])\s+', text.strip())
+        if not chunks:
+            return phrases
+
+        cursor = 0
+        for chunk in chunks:
+            raw = (chunk or "").strip()
+            if not raw:
+                continue
+            idx = text.find(raw, cursor)
+            if idx < 0:
+                idx = cursor
+            end = idx + len(raw)
+            cursor = end
+
+            is_question = raw.endswith("?")
+            is_exclamation = raw.endswith("!")
+            cleaned = re.sub(r"[.!?]+$", "", raw).strip()
+            if cleaned and len(cleaned) >= self.min_length:
+                phrases.append(
+                    Phrase(
+                        text=cleaned,
+                        start_pos=idx,
+                        end_pos=end,
+                        is_question=is_question,
+                        is_exclamation=is_exclamation,
+                    )
+                )
+
+        # Aucun split détecté -> phrase unique
+        if not phrases and len(text.strip()) >= self.min_length:
+            only = text.strip()
+            phrases.append(
+                Phrase(
+                    text=re.sub(r"[.!?]+$", "", only).strip(),
                     start_pos=0,
                     end_pos=len(text),
-                    is_question='?' in text,
-                    is_exclamation='!' in text
-                ))
-            return phrases
-        
-        # Construire les phrases à partir des matches
-        start = 0
-        for i, match in enumerate(matches):
-            # Déterminer la fin de la phrase
-            if match.group(2):  # Majuscule trouvée après ponctuation
-                # La phrase se termine juste avant l'espace qui précède la majuscule
-                end = match.start() + len(match.group(1))
-            else:  # Fin de texte
-                end = match.end()
-            
-            # Extraire la phrase
-            phrase_text = text[start:end].strip()
-            
-            # Nettoyer la ponctuation finale
-            phrase_text = re.sub(r'[.!?]+$', '', phrase_text).strip()
-            
-            # Vérifier la longueur minimale avant d'ajouter
-            if phrase_text and len(phrase_text) >= self.min_length:
-                phrases.append(Phrase(
-                    text=phrase_text,
-                    start_pos=start,
-                    end_pos=end,
-                    is_question='?' in (match.group(1) or match.group(3) or ''),
-                    is_exclamation='!' in (match.group(1) or match.group(3) or '')
-                ))
-            
-            # Déplacer le début pour la prochaine phrase
-            if match.group(2):  # Si on a trouvé une majuscule après
-                # Commencer après l'espace (la majuscule fait partie de la prochaine phrase)
-                start = match.start() + len(match.group(1)) + 1
-            else:  # Fin de texte
-                start = end
-        
-        # Ajouter la dernière phrase si elle n'a pas été capturée
-        if start < len(text):
-            remaining = text[start:].strip()
-            # Nettoyer la ponctuation finale
-            remaining = re.sub(r'[.!?]+$', '', remaining).strip()
-            if remaining and len(remaining) >= self.min_length:
-                phrases.append(Phrase(
-                    text=remaining,
-                    start_pos=start,
-                    end_pos=len(text),
-                    is_question='?' in text[start:],
-                    is_exclamation='!' in text[start:]
-                ))
-        
+                    is_question=only.endswith("?"),
+                    is_exclamation=only.endswith("!"),
+                )
+            )
+
         return phrases
     
     def _filter_phrases(self, phrases: List[Phrase]) -> List[Phrase]:

@@ -135,7 +135,11 @@ class MemoryRank:
         for memory_id, base_rank in base_ranks.items():
             age = memory_ages.get(memory_id, 0.0)
             decay = np.exp(-decay_factor * age)
-            decayed_ranks[memory_id] = base_rank * decay
+            # Combiner décroissance exponentielle + pénalité d'ancienneté.
+            # Cette formulation privilégie les souvenirs récents lorsque
+            # les scores structurels sont proches.
+            age_penalty = 1.0 / (1.0 + max(0.0, age))
+            decayed_ranks[memory_id] = base_rank * decay * age_penalty
         
         return decayed_ranks
     

@@ -17,6 +17,7 @@ from typing import Any, Dict, List
 class BrainType(str, Enum):
     LANG = "lang"
     CODE = "code"
+    SELF_IMPROVE = "self_improve"
     VISION = "vision"
     AUDIO = "audio"
     MEMORY = "memory"
@@ -53,6 +54,19 @@ class NeuralRouter:
             )
 
         code_like = any(k in text for k in ("python", "javascript", "bug", "refactor", "stack trace", "code"))
+        self_improve_like = any(
+            k in text
+            for k in (
+                "auto-amélioration",
+                "auto amélioration",
+                "self improve",
+                "self-improve",
+                "se recoder",
+                "améliore ton code",
+                "ameliore ton code",
+                "modifie ton code",
+            )
+        )
         vision_like = any(k in text for k in ("image", "screenshot", "photo", "ocr", "diagramme", "diagram"))
         audio_like = any(k in text for k in ("audio", "voix", "transcrire", "transcription", "tts", "stt"))
         memory_like = any(
@@ -65,7 +79,11 @@ class NeuralRouter:
         primary = BrainType.LANG
         sub_tasks: List[str] = []
 
-        if code_like:
+        if self_improve_like:
+            primary = BrainType.SELF_IMPROVE
+            required.append(BrainType.SELF_IMPROVE)
+            sub_tasks.append("self_improvement")
+        elif code_like:
             primary = BrainType.CODE
             required.append(BrainType.CODE)
             sub_tasks.append("code_generation_or_debug")

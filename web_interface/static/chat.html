@@ -532,6 +532,36 @@
             display: flex;
         }
 
+        .autonomy-panel {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            margin: 0 20px 12px 20px;
+            border: 1px solid #dde1ff;
+            border-left: 4px solid #667eea;
+            background: #f6f7ff;
+            border-radius: 8px;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .autonomy-panel input {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid #ddd;
+            outline: none;
+        }
+
+        .autonomy-status {
+            font-size: 12px;
+            color: #555;
+            min-width: 120px;
+            text-align: right;
+        }
+
         .self-mod-actions {
             display: flex;
             gap: 8px;
@@ -677,6 +707,13 @@
             </div>
         </div>
 
+        <div id="autonomyPanel" class="autonomy-panel">
+            <input id="autonomyObjective" type="text" placeholder="Objectif autonome (ex: améliorer la doc, analyser logs, proposer roadmap)..." />
+            <button id="autonomyStartBtn" class="small-btn approve-btn">Démarrer</button>
+            <button id="autonomyStopBtn" class="small-btn reject-btn">Stop</button>
+            <div id="autonomyStatus" class="autonomy-status">Autonomie: ?</div>
+        </div>
+
         <div class="chat-input-container">
             <input 
                 type="text" 
@@ -710,6 +747,10 @@
         const selfModText = document.getElementById('selfModText');
         const approveSelfModBtn = document.getElementById('approveSelfModBtn');
         const rejectSelfModBtn = document.getElementById('rejectSelfModBtn');
+        const autonomyObjective = document.getElementById('autonomyObjective');
+        const autonomyStartBtn = document.getElementById('autonomyStartBtn');
+        const autonomyStopBtn = document.getElementById('autonomyStopBtn');
+        const autonomyStatus = document.getElementById('autonomyStatus');
 
         // Fonction pour formater l'heure
         function formatTime(timestamp) {
@@ -1404,6 +1445,63 @@
             }
         }
 
+        function setAutonomyStatusText(st) {
+            if (!st) {
+                autonomyStatus.textContent = 'Autonomie: ?';
+                return;
+            }
+            if (st.running) {
+                autonomyStatus.textContent = `Autonomie: ON (${st.step}/${st.max_steps})`;
+            } else {
+                autonomyStatus.textContent = 'Autonomie: OFF';
+            }
+        }
+
+        async function refreshAutonomyStatus() {
+            try {
+                const r = await fetch('/autonomy/status');
+                const data = await r.json();
+                setAutonomyStatusText(data.autonomy);
+            } catch (e) {
+                setAutonomyStatusText(null);
+            }
+        }
+
+        async function startAutonomy() {
+            const obj = (autonomyObjective.value || '').trim();
+            if (!obj) {
+                addMessage("Veuillez définir un objectif autonome avant de démarrer.", 'system', new Date().toISOString());
+                return;
+            }
+            try {
+                const r = await fetch('/autonomy/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ objective: obj, interval_s: 8.0, max_steps: 50 })
+                });
+                const data = await r.json();
+                setAutonomyStatusText(data.autonomy);
+                addMessage(`Autonomie démarrée: ${obj}`, 'system', new Date().toISOString());
+            } catch (e) {
+                addMessage(`Erreur démarrage autonomie: ${e}`, 'error', new Date().toISOString());
+            }
+        }
+
+        async function stopAutonomy() {
+            try {
+                const r = await fetch('/autonomy/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: 'stopped_from_ui' })
+                });
+                const data = await r.json();
+                setAutonomyStatusText(data.autonomy);
+                addMessage('Autonomie stoppée.', 'system', new Date().toISOString());
+            } catch (e) {
+                addMessage(`Erreur stop autonomie: ${e}`, 'error', new Date().toISOString());
+            }
+        }
+
         // Fonction pour se connecter
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1489,6 +1587,21 @@
                     case 'process_end':
                         addProcessMessage(data.content, 'process_end', data.timestamp);
                         break;
+
+                    case 'autonomy_event': {
+                        const ev = data.event || {};
+                        const evType = ev.type || 'autonomy_event';
+                        const step = (typeof ev.step !== 'undefined') ? ` (step ${ev.step})` : '';
+                        const summary = evType === 'autonomy_tick'
+                            ? (ev.payload && ev.payload.lia_response ? ev.payload.lia_response : '')
+                            : (ev.error || ev.reason || ev.objective || '');
+                        const text = `[AUTONOMIE] ${evType}${step}\n${summary}`.trim();
+                        addProcessMessage(text, 'lia_process', data.timestamp);
+                        if (evType === 'autonomy_started' || evType === 'autonomy_stopped' || evType === 'autonomy_completed') {
+                            refreshAutonomyStatus();
+                        }
+                        break;
+                    }
 
                     case 'lia_process':
                         // Étapes internes de LIA (menus/décisions) transmises en temps réel
@@ -1606,6 +1719,8 @@
         sendButton.addEventListener('click', sendMessage);
         approveSelfModBtn.addEventListener('click', approvePendingSelfMod);
         rejectSelfModBtn.addEventListener('click', rejectPendingSelfMod);
+        autonomyStartBtn.addEventListener('click', startAutonomy);
+        autonomyStopBtn.addEventListener('click', stopAutonomy);
         
         chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1616,6 +1731,7 @@
 
         // Se connecter au chargement
         connect();
+        refreshAutonomyStatus();
     </script>
 </body>
 </html>
