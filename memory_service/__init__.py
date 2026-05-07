@@ -6,6 +6,7 @@ from .models import TraitModel, SouvenirModel, InteractionModel, PatternModel, B
 from .db import Database, get_db
 from .store import MemoryStore
 from .memory_adapter import MemoryAdapter
+from .autonomy_store import AutonomyStore
 from .api import app
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "get_db",
     "MemoryStore",
     "MemoryAdapter",
+    "AutonomyStore",
     "app",
 ]
 

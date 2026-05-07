@@ -22,9 +22,7 @@ from interfaces import UserChannel
 from core import CoreConfig
 from support import SupportChannel, SupportConfig, GeminiAdapter
 from memory_service import MemoryAdapter
-
-# Autonomie continue (runner)
-from autonomy import AutonomyRunner
+from core import AutonomyBrain, AutonomyScheduler
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +42,7 @@ static_dir.mkdir(exist_ok=True)
 
 # Instance globale du canal utilisateur
 user_channel: Optional[UserChannel] = None
-autonomy_runner: Optional[AutonomyRunner] = None
+autonomy_scheduler: Optional[AutonomyScheduler] = None
 
 
 class ConnectionManager:
@@ -87,16 +85,28 @@ def _autonomy_event_payload(event: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-async def _ensure_autonomy_runner() -> AutonomyRunner:
-    global autonomy_runner
-    if autonomy_runner is not None:
-        return autonomy_runner
-    # Diffuser les événements à toutes les sessions connectées
-    autonomy_runner = AutonomyRunner(
-        system_events_log_path=SYSTEM_EVENTS_LOG_PATH,
+async def _ensure_autonomy_scheduler() -> AutonomyScheduler:
+    global autonomy_scheduler
+    if autonomy_scheduler is not None:
+        return autonomy_scheduler
+
+    async def _codebrain_action(spec: str) -> Dict[str, Any]:
+        # Appel direct du cycle self-improvement du core adapter.
+        core = await _get_core_adapter()
+        if not hasattr(core, "_run_self_improvement_cycle"):
+            return {"success": False, "reason": "core self-improvement unavailable"}
+        message = f"Auto amélioration: recode toi pour {spec}"
+        response = await core._run_self_improvement_cycle(message, session_id="autonomy_loop")
+        text = str(response or "")
+        success = "appliquée" in text.lower() or "applied" in text.lower()
+        return {"success": success, "response": text}
+
+    brain = AutonomyBrain(code_action_callback=_codebrain_action)
+    autonomy_scheduler = AutonomyScheduler(
+        brain=brain,
         on_event=lambda ev: manager.broadcast(_autonomy_event_payload(ev)),
     )
-    return autonomy_runner
+    return autonomy_scheduler
 
 
 def start_pattern_brain_subprocess() -> None:
@@ -292,8 +302,9 @@ async def initialize_user_channel():
         llm_temperature = float(os.getenv("LIA_LLM_TEMPERATURE", "0.8"))
         llm_vllm_max_len = int(os.getenv("LIA_VLLM_MAX_MODEL_LEN", "32768"))
         llm_vllm_dtype = os.getenv("LIA_VLLM_DTYPE", "float16").strip()
-        llm_vllm_gpu_mem = float(os.getenv("LIA_VLLM_GPU_MEMORY_UTILIZATION", "0.8"))
+        llm_vllm_gpu_mem = float(os.getenv("LIA_VLLM_GPU_MEMORY_UTILIZATION", "0.75"))
         llm_enable_self_improvement = os.getenv("LIA_ENABLE_SELF_IMPROVEMENT", "1").strip().lower() in {"1", "true", "yes", "oui"}
+        llm_require_human_approval_self_mod = os.getenv("LIA_REQUIRE_HUMAN_APPROVAL_SELF_MOD", "0").strip().lower() in {"1", "true", "yes", "oui"}
         llm_autonomy_mode = os.getenv("LIA_AUTONOMY_MODE", "auto_with_audit").strip().lower()
         llm_autonomy_min_plan_conf = float(os.getenv("LIA_AUTONOMY_MIN_PLAN_CONFIDENCE", "0.55"))
         llm_autonomy_min_prompt_conf = float(os.getenv("LIA_AUTONOMY_MIN_PROMPT_CONFIDENCE", "0.55"))
@@ -318,6 +329,7 @@ async def initialize_user_channel():
                 enable_neural_router=True,
                 enable_real_brain_routing=True,
                 enable_self_improvement=llm_enable_self_improvement,
+                require_human_approval_for_self_mod=llm_require_human_approval_self_mod,
                 autonomy_mode=llm_autonomy_mode,
                 autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
                 autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
@@ -348,6 +360,7 @@ async def initialize_user_channel():
                     temperature=0.8,
                     enable_neural_router=True,
                     enable_self_improvement=llm_enable_self_improvement,
+                    require_human_approval_for_self_mod=llm_require_human_approval_self_mod,
                     autonomy_mode=llm_autonomy_mode,
                     autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
                     autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
@@ -363,6 +376,7 @@ async def initialize_user_channel():
                     temperature=0.8,
                     enable_neural_router=True,
                     enable_self_improvement=llm_enable_self_improvement,
+                    require_human_approval_for_self_mod=llm_require_human_approval_self_mod,
                     autonomy_mode=llm_autonomy_mode,
                     autonomy_min_plan_confidence=llm_autonomy_min_plan_conf,
                     autonomy_prompt_min_confidence=llm_autonomy_min_prompt_conf,
@@ -468,7 +482,7 @@ async def startup_event():
     # Lancer le noyau subconscient (pattern-brain) en arrière-plan
     await ensure_pattern_brain_ready()
     await initialize_user_channel()
-    await _ensure_autonomy_runner()
+    await _ensure_autonomy_scheduler()
 
 
 @app.get("/")
@@ -624,45 +638,26 @@ async def health_kpis():
 
 @app.get("/autonomy/status")
 async def autonomy_status():
-    """Retourne l'état du runner d'autonomie continue."""
-    runner = await _ensure_autonomy_runner()
-    st = runner.status()
+    """Retourne l'état du scheduler + snapshot d'état autonome."""
+    scheduler = await _ensure_autonomy_scheduler()
+    st = scheduler.status()
+    state = scheduler.brain.get_state().to_dict()
+    recent_cycles = scheduler.brain.store.list_recent_cycles(limit=10)
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "autonomy": st.__dict__,
+        "state": state,
+        "recent_cycles": recent_cycles,
     }
 
 
 @app.post("/autonomy/start")
 async def autonomy_start(payload: Dict[str, Any] = Body(default_factory=dict)):
-    """Démarre la boucle autonome."""
-    runner = await _ensure_autonomy_runner()
-    await initialize_user_channel()
-
-    objective = str(payload.get("objective") or "").strip()
-    interval_s = float(payload.get("interval_s") or 5.0)
-    max_steps = int(payload.get("max_steps") or 50)
-
-    async def _tick_fn(run_id: str, step: int, prompt: str) -> Dict[str, Any]:
-        assert user_channel is not None
-        session_id = f"{run_id}"
-
-        # Utiliser le mode structured pour récupérer (optionnellement) une trace; on garde la réponse.
-        result = await user_channel.send_message_structured(
-            message=prompt,
-            session_id=session_id,
-            use_autonomy=True,
-        )
-        # Payload compact (évite d'envoyer toute la trace à chaque tick)
-        return {
-            "run_id": run_id,
-            "step": step,
-            "lia_response": result.get("lia_response", "") or "",
-            "success": bool(result.get("success", True)),
-        }
-
-    st = await runner.start(objective=objective, tick_fn=_tick_fn, interval_s=interval_s, max_steps=max_steps)
+    """Démarre la boucle autonome (scheduler continu)."""
+    scheduler = await _ensure_autonomy_scheduler()
+    interval_s = float(payload.get("interval_s") or 60.0)
+    st = await scheduler.start(interval_seconds=interval_s)
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
@@ -673,13 +668,120 @@ async def autonomy_start(payload: Dict[str, Any] = Body(default_factory=dict)):
 @app.post("/autonomy/stop")
 async def autonomy_stop(payload: Dict[str, Any] = Body(default_factory=dict)):
     """Stoppe la boucle autonome."""
-    runner = await _ensure_autonomy_runner()
-    reason = str(payload.get("reason") or "stopped_by_user")
-    st = await runner.stop(reason=reason)
+    scheduler = await _ensure_autonomy_scheduler()
+    st = await scheduler.stop()
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
         "autonomy": st.__dict__,
+    }
+
+
+@app.post("/autonomy/cycle")
+async def autonomy_cycle_once():
+    """Exécute un cycle autonome immédiat (debug/supervision)."""
+    scheduler = await _ensure_autonomy_scheduler()
+    payload = await scheduler.run_single_cycle()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "cycle": payload,
+    }
+
+
+@app.post("/autonomy/inject/trait")
+async def autonomy_inject_trait(payload: Dict[str, Any] = Body(default_factory=dict)):
+    scheduler = await _ensure_autonomy_scheduler()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name requis")
+    intensity = float(payload.get("intensity", 0.7))
+    category = str(payload.get("category") or "injected")
+    result = scheduler.brain.inject_trait(name=name, intensity=intensity, category=category)
+    await manager.broadcast(_autonomy_event_payload(result))
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "result": result}
+
+
+@app.post("/autonomy/inject/gauge")
+async def autonomy_inject_gauge(payload: Dict[str, Any] = Body(default_factory=dict)):
+    scheduler = await _ensure_autonomy_scheduler()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name requis")
+    if "current" not in payload:
+        raise HTTPException(status_code=400, detail="current requis")
+    result = scheduler.brain.inject_gauge(
+        name=name,
+        current=float(payload.get("current")),
+        decay_rate=payload.get("decay_rate"),
+        low=payload.get("low"),
+        critical_low=payload.get("critical_low"),
+    )
+    await manager.broadcast(_autonomy_event_payload(result))
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "result": result}
+
+
+@app.post("/autonomy/inject/desire")
+async def autonomy_inject_desire(payload: Dict[str, Any] = Body(default_factory=dict)):
+    scheduler = await _ensure_autonomy_scheduler()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name requis")
+    priority = float(payload.get("priority", 0.8))
+    generating_trait = str(payload.get("generating_trait") or "injected")
+    generating_gauge = payload.get("generating_gauge")
+    result = scheduler.brain.inject_desire(
+        name=name,
+        priority=priority,
+        generating_trait=generating_trait,
+        generating_gauge=generating_gauge,
+    )
+    await manager.broadcast(_autonomy_event_payload(result))
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "result": result}
+
+
+@app.post("/autonomy/inject/dream")
+async def autonomy_inject_dream(payload: Dict[str, Any] = Body(default_factory=dict)):
+    scheduler = await _ensure_autonomy_scheduler()
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name requis")
+    progress = float(payload.get("progress", 0.0))
+    intensity = float(payload.get("intensity", 0.8))
+    result = scheduler.brain.inject_dream(name=name, progress=progress, intensity=intensity)
+    await manager.broadcast(_autonomy_event_payload(result))
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "result": result}
+
+
+@app.post("/autonomy/inject/life-event")
+async def autonomy_inject_life_event(payload: Dict[str, Any] = Body(default_factory=dict)):
+    scheduler = await _ensure_autonomy_scheduler()
+    event_type = str(payload.get("event_type") or "").strip()
+    if not event_type:
+        raise HTTPException(status_code=400, detail="event_type requis")
+    gauge_deltas = payload.get("gauge_deltas")
+    trait_deltas = payload.get("trait_deltas")
+    if gauge_deltas is not None and not isinstance(gauge_deltas, dict):
+        raise HTTPException(status_code=400, detail="gauge_deltas doit être un objet")
+    if trait_deltas is not None and not isinstance(trait_deltas, dict):
+        raise HTTPException(status_code=400, detail="trait_deltas doit être un objet")
+    result = scheduler.brain.inject_life_event(
+        event_type=event_type,
+        gauge_deltas=gauge_deltas,
+        trait_deltas=trait_deltas,
+    )
+    await manager.broadcast(_autonomy_event_payload(result))
+    return {"status": "ok", "timestamp": datetime.now().isoformat(), "result": result}
+
+
+@app.get("/autonomy/life-events")
+async def autonomy_life_events():
+    scheduler = await _ensure_autonomy_scheduler()
+    presets = scheduler.brain.list_life_event_presets()
+    return {
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "life_events": presets,
     }
 
 

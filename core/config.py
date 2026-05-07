@@ -24,7 +24,7 @@ class CoreConfig:
     # vLLM (serving local via moteur Python)
     vllm_dtype: str = "auto"  # "auto", "float16", "bfloat16"
     vllm_max_model_len: int = 32768
-    vllm_gpu_memory_utilization: float = 0.9
+    vllm_gpu_memory_utilization: float = 0.75
     router_gpu_memory_utilization: float = 0.08
     router_model: str = "Qwen/Qwen2.5-1.5B-Instruct"
     lang_model: Optional[str] = "Qwen/Qwen2.5-72B-Instruct"
@@ -74,10 +74,10 @@ class CoreConfig:
     enable_vision_brain: bool = True
     enable_audio_brain: bool = False
     enable_identity_brain: bool = True
-    enable_self_improvement: bool = False
+    enable_self_improvement: bool = True
     sandbox_timeout_seconds: int = 60
     max_self_modifications_per_session: int = 3
-    require_human_approval_for_self_mod: bool = True
+    require_human_approval_for_self_mod: bool = False
     system_log_path: str = "logs/lia_system_events.jsonl"
     
     def to_dict(self) -> dict:

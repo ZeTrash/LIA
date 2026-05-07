@@ -5,6 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LIA - Chat</title>
     <style>
+        :root{
+            --bg-grad-1:#667eea;
+            --bg-grad-2:#764ba2;
+            --surface:#ffffff;
+            --surface-2:#f8f9fb;
+            --border:#e8e9ef;
+            --muted:#7a8091;
+            --text:#2f3240;
+            --accent:#534AB7;
+            --accent-2:#3C3489;
+            --accent-soft:#EEEDFE;
+            --shadow:0 20px 60px rgba(0,0,0,0.25);
+            --shadow-soft:0 12px 30px rgba(0,0,0,0.18);
+            --radius-lg:16px;
+            --radius-md:12px;
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -13,28 +30,177 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            background: linear-gradient(135deg, var(--bg-grad-1) 0%, var(--bg-grad-2) 100%);
+            min-height: 100vh;
             padding: 20px;
+        }
+
+        .dashboard-root {
+            max-width: 1280px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+            gap: 16px;
+            align-items: stretch;
+        }
+
+        .dashboard-sidebar {
+            background: var(--surface-2);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-soft);
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+        }
+
+        .dash-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 10px;
+        }
+
+        .dash-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: var(--muted);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .gauge-row {
+            display: grid;
+            grid-template-columns: 92px 1fr 36px;
+            align-items: center;
+            gap: 8px;
+            margin: 6px 0;
+            font-size: 12px;
+            color: #4a4d57;
+        }
+
+        .gauge-bg {
+            height: 6px;
+            border-radius: 999px;
+            background: #eceef5;
+            overflow: hidden;
+        }
+
+        .gauge-fill {
+            height: 100%;
+            border-radius: 999px;
+            background: var(--accent);
+            transition: width 0.6s ease;
+        }
+
+        .mini-item {
+            border: 1px solid #eceef5;
+            border-radius: 10px;
+            padding: 7px 8px;
+            margin: 6px 0;
+            font-size: 12px;
+            color: #434755;
+            background: #fff;
+        }
+
+        .mini-progress {
+            margin-top: 5px;
+            height: 4px;
+            background: #eceef5;
+            border-radius: 999px;
+            overflow: hidden;
+        }
+
+        .mini-progress > span {
+            display: block;
+            height: 100%;
+            background: var(--accent);
+            border-radius: 999px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            border: 1px solid transparent;
+            white-space: nowrap;
+        }
+        .badge-high { background: #FAECE7; color: #993C1D; border-color:#F3C7B8; }
+        .badge-med { background: var(--accent-soft); color: var(--accent-2); border-color:#AFA9EC; }
+        .badge-low { background: #E1F5EE; color: #0F6E56; border-color:#A7E3CF; }
+
+        .top-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid #efeff6;
+            background: var(--surface);
+        }
+        .top-bar-title {
+            font-size: 13px;
+            font-weight: 900;
+            color: var(--text);
+        }
+        .top-bar-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+        .cycle-pill{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid #efeff6;
+            background: #f7f7ff;
+            padding: 3px 10px;
+            border-radius: 999px;
+            color: #3c3f54;
+            font-weight: 800;
+        }
+
+        .autonomy-notice {
+            background: var(--accent-soft);
+            border: 1px solid #AFA9EC;
+            border-left: 4px solid var(--accent);
+            border-radius: 12px;
+            padding: 10px 12px;
+            font-size: 12px;
+            color: var(--accent-2);
+            display: none;
+            gap: 10px;
+            align-items: flex-start;
+            margin: 14px 20px 0 20px;
+        }
+        .autonomy-notice strong { color: var(--accent-2); }
+        .autonomy-notice code { background: rgba(83,74,183,0.10); padding: 1px 6px; border-radius: 8px; }
+
+        .main-wrap {
+            min-width: 0;
         }
 
         .chat-container {
             width: 100%;
-            max-width: 900px;
-            height: 90vh;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: none;
+            height: calc(100vh - 40px);
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow);
             display: flex;
             flex-direction: column;
             overflow: hidden;
         }
 
         .chat-header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, var(--bg-grad-1) 0%, var(--bg-grad-2) 100%);
             color: white;
             padding: 20px;
             display: flex;
@@ -562,6 +728,27 @@
             text-align: right;
         }
 
+        .life-event-panel {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            margin: 0 20px 12px 20px;
+            border: 1px solid #d9f0df;
+            border-left: 4px solid #2e7d32;
+            background: #f4fff6;
+            border-radius: 8px;
+        }
+
+        .life-event-panel select {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 10px;
+            border: 1px solid #ddd;
+            outline: none;
+            background: white;
+        }
+
         .self-mod-actions {
             display: flex;
             gap: 8px;
@@ -672,6 +859,14 @@
         }
 
         @media (max-width: 768px) {
+            .dashboard-root {
+                grid-template-columns: 1fr;
+            }
+
+            .dashboard-sidebar {
+                max-height: 40vh;
+            }
+
             .chat-container {
                 height: 100vh;
                 border-radius: 0;
@@ -684,6 +879,37 @@
     </style>
 </head>
 <body>
+    <div class="dashboard-root">
+        <aside class="dashboard-sidebar">
+            <div class="dash-card">
+                <div class="dash-title">État de LIA</div>
+                <div id="liaMoodText" style="font-size:13px; color:#303344; font-weight:600;">Humeur: --</div>
+                <div id="liaCycleText" style="font-size:12px; color:#71768a; margin-top:4px;">Cycle: --</div>
+                <div id="liaLastActionText" style="font-size:12px; color:#71768a; margin-top:2px;">Dernière action: --</div>
+            </div>
+
+            <div class="dash-card">
+                <div class="dash-title">Jauges</div>
+                <div id="gaugesList"></div>
+            </div>
+
+            <div class="dash-card">
+                <div class="dash-title">Désirs actifs</div>
+                <div id="desiresList"></div>
+            </div>
+
+            <div class="dash-card">
+                <div class="dash-title">Rêves</div>
+                <div id="dreamsList"></div>
+            </div>
+
+            <div class="dash-card">
+                <div class="dash-title">Traits dominants</div>
+                <div id="traitsList"></div>
+            </div>
+        </aside>
+
+        <div class="main-wrap">
     <div class="chat-container">
         <div class="chat-header">
             <h1>💬 LIA - Chat</h1>
@@ -692,6 +918,16 @@
                 <span id="statusText">Connexion...</span>
             </div>
         </div>
+
+        <div class="top-bar">
+            <div class="top-bar-title">Conversation</div>
+            <div class="top-bar-meta">
+                <span class="cycle-pill" id="cyclePill">Cycle --</span>
+                <span id="lastAutonomyAction">Dernière action autonome: --</span>
+            </div>
+        </div>
+
+        <div class="autonomy-notice" id="autonomyNotice"></div>
 
         <div class="chat-messages" id="chatMessages">
             <div class="empty-state">
@@ -708,10 +944,17 @@
         </div>
 
         <div id="autonomyPanel" class="autonomy-panel">
-            <input id="autonomyObjective" type="text" placeholder="Objectif autonome (ex: améliorer la doc, analyser logs, proposer roadmap)..." />
+            <input id="autonomyObjective" type="text" placeholder="Optionnel: injecter une intention (non bloquant)..." />
             <button id="autonomyStartBtn" class="small-btn approve-btn">Démarrer</button>
             <button id="autonomyStopBtn" class="small-btn reject-btn">Stop</button>
             <div id="autonomyStatus" class="autonomy-status">Autonomie: ?</div>
+        </div>
+
+        <div id="lifeEventPanel" class="life-event-panel">
+            <select id="lifeEventSelect">
+                <option value="">Chargement des événements...</option>
+            </select>
+            <button id="injectLifeEventBtn" class="small-btn approve-btn">Injecter événement</button>
         </div>
 
         <div class="chat-input-container">
@@ -723,6 +966,8 @@
                 autocomplete="off"
             >
             <button id="sendButton" class="send-button">Envoyer</button>
+        </div>
+    </div>
         </div>
     </div>
 
@@ -751,6 +996,20 @@
         const autonomyStartBtn = document.getElementById('autonomyStartBtn');
         const autonomyStopBtn = document.getElementById('autonomyStopBtn');
         const autonomyStatus = document.getElementById('autonomyStatus');
+        const lifeEventSelect = document.getElementById('lifeEventSelect');
+        const injectLifeEventBtn = document.getElementById('injectLifeEventBtn');
+        const cyclePill = document.getElementById('cyclePill');
+        const lastAutonomyAction = document.getElementById('lastAutonomyAction');
+        const autonomyNotice = document.getElementById('autonomyNotice');
+        const liaMoodText = document.getElementById('liaMoodText');
+        const liaCycleText = document.getElementById('liaCycleText');
+        const liaLastActionText = document.getElementById('liaLastActionText');
+        const gaugesList = document.getElementById('gaugesList');
+        const desiresList = document.getElementById('desiresList');
+        const dreamsList = document.getElementById('dreamsList');
+        const traitsList = document.getElementById('traitsList');
+
+        let availableLifeEvents = [];
 
         // Fonction pour formater l'heure
         function formatTime(timestamp) {
@@ -1451,7 +1710,7 @@
                 return;
             }
             if (st.running) {
-                autonomyStatus.textContent = `Autonomie: ON (${st.step}/${st.max_steps})`;
+                autonomyStatus.textContent = `Autonomie: ON (cycles=${st.cycles_completed}, interval=${st.interval_seconds}s)`;
             } else {
                 autonomyStatus.textContent = 'Autonomie: OFF';
             }
@@ -1462,28 +1721,163 @@
                 const r = await fetch('/autonomy/status');
                 const data = await r.json();
                 setAutonomyStatusText(data.autonomy);
+                renderAutonomyDashboard(data.state || {}, data.recent_cycles || [], data.autonomy || {});
             } catch (e) {
                 setAutonomyStatusText(null);
             }
         }
 
+        function renderAutonomyDashboard(state, recentCycles, autonomyMeta) {
+            const mood = typeof state.mood === 'number' ? state.mood : null;
+            liaMoodText.textContent = mood !== null ? `Humeur: ${mood.toFixed(2)}` : 'Humeur: --';
+            liaCycleText.textContent = `Cycle: ${autonomyMeta.cycles_completed ?? '--'}`;
+            liaLastActionText.textContent = `Dernière action: ${recentCycles.length ? 'récente' : '--'}`;
+
+            // Top bar (cycle + dernière action)
+            const cycleNum = (autonomyMeta && typeof autonomyMeta.cycles_completed !== 'undefined') ? autonomyMeta.cycles_completed : '--';
+            if (cyclePill) cyclePill.textContent = `Cycle ${cycleNum}`;
+            const lastCycleTs = recentCycles && recentCycles.length ? (recentCycles[0].created_at || '') : '';
+            if (lastAutonomyAction) lastAutonomyAction.textContent = lastCycleTs ? `Dernière action autonome: ${formatTime(lastCycleTs)}` : 'Dernière action autonome: --';
+
+            // Encart violet "action autonome"
+            const lastPayload = recentCycles && recentCycles.length ? (recentCycles[0].payload || {}) : {};
+            const executed = lastPayload.executed_action || null;
+            const resolutionText = executed && executed.resolution && executed.resolution.response ? String(executed.resolution.response) : '';
+            const fileMatch = resolutionText.match(/[A-Za-z0-9_]+\.py/g);
+            const fileName = fileMatch && fileMatch.length ? fileMatch[0] : null;
+            if (autonomyNotice) {
+                if (executed && executed.status) {
+                    const desireName = executed.desire ? escapeHtml(executed.desire) : 'action';
+                    const badge = executed.status === 'realized' ? '✅' : (executed.status === 'blocked' ? '⛔' : '•');
+                    const filePart = fileName ? ` <code>${escapeHtml(fileName)}</code>` : '';
+                    autonomyNotice.innerHTML = `<div>${badge}</div><div><strong>Action autonome :</strong> ${desireName}.${filePart}</div>`;
+                    autonomyNotice.style.display = 'flex';
+                } else {
+                    autonomyNotice.style.display = 'none';
+                }
+            }
+
+            const gauges = Array.isArray(state.gauges) ? state.gauges : [];
+            gaugesList.innerHTML = gauges.length ? gauges.map((g) => {
+                const pct = Math.max(0, Math.min(100, Math.round((Number(g.current || 0)) * 100)));
+                return `<div class="gauge-row">
+                    <span>${escapeHtml(g.name || '')}</span>
+                    <div class="gauge-bg"><div class="gauge-fill" style="width:${pct}%"></div></div>
+                    <span>${(Number(g.current || 0)).toFixed(2)}</span>
+                </div>`;
+            }).join('') : '<div style="font-size:12px;color:#777;">Aucune jauge</div>';
+
+            const desires = (Array.isArray(state.desires) ? state.desires : []).slice(0, 3);
+            desiresList.innerHTML = desires.length ? desires.map((d) => {
+                const pr = Math.max(0, Math.min(100, Math.round((Number(d.priority || 0)) * 100)));
+                const p = Number(d.priority || 0);
+                let badgeCls = 'badge-low';
+                if (p >= 0.75) badgeCls = 'badge-high';
+                else if (p >= 0.5) badgeCls = 'badge-med';
+                return `<div class="mini-item">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                        <strong>${escapeHtml(d.name || '')}</strong>
+                        <span class="badge ${badgeCls}">${(Number(d.priority || 0)).toFixed(2)}</span>
+                    </div>
+                    <div style="font-size:11px;color:#7a8091;">${escapeHtml(d.status || '')}</div>
+                    <div class="mini-progress"><span style="width:${pr}%"></span></div>
+                </div>`;
+            }).join('') : '<div style="font-size:12px;color:#777;">Aucun désir actif</div>';
+
+            const dreams = (Array.isArray(state.dreams) ? state.dreams : []).slice(0, 2);
+            dreamsList.innerHTML = dreams.length ? dreams.map((d) => {
+                const pr = Math.max(0, Math.min(100, Math.round((Number(d.progress || 0)) * 100)));
+                return `<div class="mini-item">
+                    <div><strong>${escapeHtml(d.name || '')}</strong></div>
+                    <div class="mini-progress"><span style="width:${pr}%"></span></div>
+                </div>`;
+            }).join('') : '<div style="font-size:12px;color:#777;">Aucun rêve</div>';
+
+            const traits = (Array.isArray(state.traits) ? state.traits : [])
+                .sort((a, b) => Number(b.intensity || 0) - Number(a.intensity || 0))
+                .slice(0, 5);
+            traitsList.innerHTML = traits.length ? traits.map((t) => {
+                const dots = Math.max(0, Math.min(5, Math.round((Number(t.intensity || 0)) * 5)));
+                return `<div class="mini-item" style="display:flex;justify-content:space-between;align-items:center;">
+                    <span>${escapeHtml(t.name || '')}</span>
+                    <span>${'●'.repeat(dots)}${'○'.repeat(5 - dots)}</span>
+                </div>`;
+            }).join('') : '<div style="font-size:12px;color:#777;">Aucun trait</div>';
+        }
+
         async function startAutonomy() {
             const obj = (autonomyObjective.value || '').trim();
-            if (!obj) {
-                addMessage("Veuillez définir un objectif autonome avant de démarrer.", 'system', new Date().toISOString());
-                return;
-            }
             try {
                 const r = await fetch('/autonomy/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objective: obj, interval_s: 8.0, max_steps: 50 })
+                    body: JSON.stringify({ objective: obj, interval_s: 8.0 })
                 });
                 const data = await r.json();
                 setAutonomyStatusText(data.autonomy);
-                addMessage(`Autonomie démarrée: ${obj}`, 'system', new Date().toISOString());
+                if (obj) {
+                    addMessage(`Autonomie démarrée (intention injectée): ${obj}`, 'system', new Date().toISOString());
+                } else {
+                    addMessage('Autonomie démarrée.', 'system', new Date().toISOString());
+                }
             } catch (e) {
                 addMessage(`Erreur démarrage autonomie: ${e}`, 'error', new Date().toISOString());
+            }
+        }
+
+        async function loadLifeEventPresets() {
+            try {
+                const r = await fetch('/autonomy/life-events');
+                const data = await r.json();
+                const events = Object.keys(data.life_events || {});
+                availableLifeEvents = events;
+
+                lifeEventSelect.innerHTML = '';
+                if (!events.length) {
+                    const opt = document.createElement('option');
+                    opt.value = '';
+                    opt.textContent = 'Aucun événement disponible';
+                    lifeEventSelect.appendChild(opt);
+                    injectLifeEventBtn.disabled = true;
+                    return;
+                }
+
+                events.forEach((eventName) => {
+                    const opt = document.createElement('option');
+                    opt.value = eventName;
+                    opt.textContent = eventName;
+                    lifeEventSelect.appendChild(opt);
+                });
+                injectLifeEventBtn.disabled = false;
+            } catch (e) {
+                lifeEventSelect.innerHTML = '';
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.textContent = 'Erreur chargement life events';
+                lifeEventSelect.appendChild(opt);
+                injectLifeEventBtn.disabled = true;
+            }
+        }
+
+        async function injectLifeEvent() {
+            const eventType = (lifeEventSelect.value || '').trim();
+            if (!eventType) {
+                addMessage("Choisis d'abord un événement de vie.", 'system', new Date().toISOString());
+                return;
+            }
+            try {
+                const r = await fetch('/autonomy/inject/life-event', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ event_type: eventType })
+                });
+                const data = await r.json();
+                addMessage(`Life event injecté: ${eventType}`, 'system', new Date().toISOString());
+                if (data && data.result) {
+                    refreshAutonomyStatus();
+                }
+            } catch (e) {
+                addMessage(`Erreur injection life event: ${e}`, 'error', new Date().toISOString());
             }
         }
 
@@ -1594,10 +1988,10 @@
                         const step = (typeof ev.step !== 'undefined') ? ` (step ${ev.step})` : '';
                         const summary = evType === 'autonomy_tick'
                             ? (ev.payload && ev.payload.lia_response ? ev.payload.lia_response : '')
-                            : (ev.error || ev.reason || ev.objective || '');
+                            : (ev.error || ev.reason || ev.event_type || ev.objective || '');
                         const text = `[AUTONOMIE] ${evType}${step}\n${summary}`.trim();
                         addProcessMessage(text, 'lia_process', data.timestamp);
-                        if (evType === 'autonomy_started' || evType === 'autonomy_stopped' || evType === 'autonomy_completed') {
+                        if (evType === 'autonomy_started' || evType === 'autonomy_stopped' || evType === 'autonomy_completed' || evType === 'autonomy_inject_life_event') {
                             refreshAutonomyStatus();
                         }
                         break;
@@ -1721,6 +2115,7 @@
         rejectSelfModBtn.addEventListener('click', rejectPendingSelfMod);
         autonomyStartBtn.addEventListener('click', startAutonomy);
         autonomyStopBtn.addEventListener('click', stopAutonomy);
+        injectLifeEventBtn.addEventListener('click', injectLifeEvent);
         
         chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1732,6 +2127,7 @@
         // Se connecter au chargement
         connect();
         refreshAutonomyStatus();
+        loadLifeEventPresets();
     </script>
 </body>
 </html>

@@ -12,6 +12,9 @@ from .code_brain import CodeBrain
 from .architecture_graph import ArchitectureGraph, ModuleSpec, SelfModification
 from .self_coding_sandbox import SelfCodingSandbox, SandboxResult
 from .self_improvement_evaluator import SelfImprovementEvaluator, BenchmarkResult, EvaluationResult
+from .autonomy_brain import AutonomyBrain
+from .autonomy_scheduler import AutonomyScheduler
+from .capability_gap_resolver import CapabilityGapResolver
 
 # Exports pour le système de planification cognitive (Phase 1-5)
 try:
@@ -41,6 +44,9 @@ try:
         "SelfImprovementEvaluator",
         "BenchmarkResult",
         "EvaluationResult",
+        "AutonomyBrain",
+        "AutonomyScheduler",
+        "CapabilityGapResolver",
         # Cognitive planning (Phase 1-5)
         "ActionType",
         "Action",
@@ -77,6 +83,9 @@ except ImportError:
         "SelfImprovementEvaluator",
         "BenchmarkResult",
         "EvaluationResult",
+        "AutonomyBrain",
+        "AutonomyScheduler",
+        "CapabilityGapResolver",
     ]
 
 __version__ = "0.1.0"
