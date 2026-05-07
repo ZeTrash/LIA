@@ -482,7 +482,26 @@ async def startup_event():
     # Lancer le noyau subconscient (pattern-brain) en arrière-plan
     await ensure_pattern_brain_ready()
     await initialize_user_channel()
-    await _ensure_autonomy_scheduler()
+    scheduler = await _ensure_autonomy_scheduler()
+    # Par défaut, l'autonomie est active dès le démarrage de app_chat.
+    # Pour la désactiver explicitement (debug), définir LIA_AUTONOMY_AUTOSTART=0.
+    autostart = os.getenv("LIA_AUTONOMY_AUTOSTART", "1").strip().lower() in {"1", "true", "yes", "oui"}
+    if autostart:
+        interval_s = float(os.getenv("LIA_AUTONOMY_INTERVAL_S", "60.0"))
+        objective = (os.getenv("LIA_AUTONOMY_OBJECTIVE", "") or "").strip()
+        try:
+            if objective:
+                scheduler.brain.inject_desire(
+                    name=objective,
+                    priority=float(os.getenv("LIA_AUTONOMY_OBJECTIVE_PRIORITY", "0.9")),
+                    generating_trait="objective",
+                )
+            await scheduler.start(interval_seconds=interval_s)
+            logger.info("✅ Autonomie auto-start activée (interval=%.1fs).", interval_s)
+        except Exception as e:
+            logger.warning("⚠️  Autonomie auto-start a échoué: %s", e)
+    else:
+        logger.info("ℹ️  AUTONOMIE DESACTIVEE (LIA_AUTONOMY_AUTOSTART=0).")
 
 
 @app.get("/")
@@ -657,6 +676,9 @@ async def autonomy_start(payload: Dict[str, Any] = Body(default_factory=dict)):
     """Démarre la boucle autonome (scheduler continu)."""
     scheduler = await _ensure_autonomy_scheduler()
     interval_s = float(payload.get("interval_s") or 60.0)
+    objective = str(payload.get("objective") or payload.get("intention") or "").strip()
+    if objective:
+        scheduler.brain.inject_desire(name=objective, priority=0.9, generating_trait="objective")
     st = await scheduler.start(interval_seconds=interval_s)
     return {
         "status": "ok",

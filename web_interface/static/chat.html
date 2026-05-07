@@ -943,20 +943,6 @@
             </div>
         </div>
 
-        <div id="autonomyPanel" class="autonomy-panel">
-            <input id="autonomyObjective" type="text" placeholder="Optionnel: injecter une intention (non bloquant)..." />
-            <button id="autonomyStartBtn" class="small-btn approve-btn">Démarrer</button>
-            <button id="autonomyStopBtn" class="small-btn reject-btn">Stop</button>
-            <div id="autonomyStatus" class="autonomy-status">Autonomie: ?</div>
-        </div>
-
-        <div id="lifeEventPanel" class="life-event-panel">
-            <select id="lifeEventSelect">
-                <option value="">Chargement des événements...</option>
-            </select>
-            <button id="injectLifeEventBtn" class="small-btn approve-btn">Injecter événement</button>
-        </div>
-
         <div class="chat-input-container">
             <input 
                 type="text" 
@@ -992,12 +978,6 @@
         const selfModText = document.getElementById('selfModText');
         const approveSelfModBtn = document.getElementById('approveSelfModBtn');
         const rejectSelfModBtn = document.getElementById('rejectSelfModBtn');
-        const autonomyObjective = document.getElementById('autonomyObjective');
-        const autonomyStartBtn = document.getElementById('autonomyStartBtn');
-        const autonomyStopBtn = document.getElementById('autonomyStopBtn');
-        const autonomyStatus = document.getElementById('autonomyStatus');
-        const lifeEventSelect = document.getElementById('lifeEventSelect');
-        const injectLifeEventBtn = document.getElementById('injectLifeEventBtn');
         const cyclePill = document.getElementById('cyclePill');
         const lastAutonomyAction = document.getElementById('lastAutonomyAction');
         const autonomyNotice = document.getElementById('autonomyNotice');
@@ -1008,8 +988,6 @@
         const desiresList = document.getElementById('desiresList');
         const dreamsList = document.getElementById('dreamsList');
         const traitsList = document.getElementById('traitsList');
-
-        let availableLifeEvents = [];
 
         // Fonction pour formater l'heure
         function formatTime(timestamp) {
@@ -1676,54 +1654,13 @@
             }
         }
 
-        async function approvePendingSelfMod() {
-            try {
-                const response = await fetch('/self-improvement/approve', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: sessionId })
-                });
-                const data = await response.json();
-                addMessage(data.result || 'Auto-modification approuvée.', 'system', new Date().toISOString());
-            } catch (e) {
-                addMessage(`Erreur approbation: ${e}`, 'error', new Date().toISOString());
-            }
-        }
-
-        async function rejectPendingSelfMod() {
-            try {
-                const response = await fetch('/self-improvement/reject', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ session_id: sessionId, reason: 'rejected from chat UI' })
-                });
-                const data = await response.json();
-                addMessage(data.result || 'Auto-modification rejetée.', 'system', new Date().toISOString());
-            } catch (e) {
-                addMessage(`Erreur rejet: ${e}`, 'error', new Date().toISOString());
-            }
-        }
-
-        function setAutonomyStatusText(st) {
-            if (!st) {
-                autonomyStatus.textContent = 'Autonomie: ?';
-                return;
-            }
-            if (st.running) {
-                autonomyStatus.textContent = `Autonomie: ON (cycles=${st.cycles_completed}, interval=${st.interval_seconds}s)`;
-            } else {
-                autonomyStatus.textContent = 'Autonomie: OFF';
-            }
-        }
-
         async function refreshAutonomyStatus() {
             try {
-                const r = await fetch('/autonomy/status');
-                const data = await r.json();
-                setAutonomyStatusText(data.autonomy);
+                const response = await fetch('/autonomy/status');
+                const data = await response.json();
                 renderAutonomyDashboard(data.state || {}, data.recent_cycles || [], data.autonomy || {});
             } catch (e) {
-                setAutonomyStatusText(null);
+                console.warn('refreshAutonomyStatus failed', e);
             }
         }
 
@@ -1733,13 +1670,15 @@
             liaCycleText.textContent = `Cycle: ${autonomyMeta.cycles_completed ?? '--'}`;
             liaLastActionText.textContent = `Dernière action: ${recentCycles.length ? 'récente' : '--'}`;
 
-            // Top bar (cycle + dernière action)
             const cycleNum = (autonomyMeta && typeof autonomyMeta.cycles_completed !== 'undefined') ? autonomyMeta.cycles_completed : '--';
             if (cyclePill) cyclePill.textContent = `Cycle ${cycleNum}`;
             const lastCycleTs = recentCycles && recentCycles.length ? (recentCycles[0].created_at || '') : '';
-            if (lastAutonomyAction) lastAutonomyAction.textContent = lastCycleTs ? `Dernière action autonome: ${formatTime(lastCycleTs)}` : 'Dernière action autonome: --';
+            if (lastAutonomyAction) {
+                lastAutonomyAction.textContent = lastCycleTs
+                    ? `Dernière action autonome: ${formatTime(lastCycleTs)}`
+                    : 'Dernière action autonome: --';
+            }
 
-            // Encart violet "action autonome"
             const lastPayload = recentCycles && recentCycles.length ? (recentCycles[0].payload || {}) : {};
             const executed = lastPayload.executed_action || null;
             const resolutionText = executed && executed.resolution && executed.resolution.response ? String(executed.resolution.response) : '';
@@ -1805,96 +1744,35 @@
             }).join('') : '<div style="font-size:12px;color:#777;">Aucun trait</div>';
         }
 
-        async function startAutonomy() {
-            const obj = (autonomyObjective.value || '').trim();
+        async function approvePendingSelfMod() {
             try {
-                const r = await fetch('/autonomy/start', {
+                const response = await fetch('/self-improvement/approve', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ objective: obj, interval_s: 8.0 })
+                    body: JSON.stringify({ session_id: sessionId })
                 });
-                const data = await r.json();
-                setAutonomyStatusText(data.autonomy);
-                if (obj) {
-                    addMessage(`Autonomie démarrée (intention injectée): ${obj}`, 'system', new Date().toISOString());
-                } else {
-                    addMessage('Autonomie démarrée.', 'system', new Date().toISOString());
-                }
+                const data = await response.json();
+                addMessage(data.result || 'Auto-modification approuvée.', 'system', new Date().toISOString());
             } catch (e) {
-                addMessage(`Erreur démarrage autonomie: ${e}`, 'error', new Date().toISOString());
+                addMessage(`Erreur approbation: ${e}`, 'error', new Date().toISOString());
             }
         }
 
-        async function loadLifeEventPresets() {
+        async function rejectPendingSelfMod() {
             try {
-                const r = await fetch('/autonomy/life-events');
-                const data = await r.json();
-                const events = Object.keys(data.life_events || {});
-                availableLifeEvents = events;
-
-                lifeEventSelect.innerHTML = '';
-                if (!events.length) {
-                    const opt = document.createElement('option');
-                    opt.value = '';
-                    opt.textContent = 'Aucun événement disponible';
-                    lifeEventSelect.appendChild(opt);
-                    injectLifeEventBtn.disabled = true;
-                    return;
-                }
-
-                events.forEach((eventName) => {
-                    const opt = document.createElement('option');
-                    opt.value = eventName;
-                    opt.textContent = eventName;
-                    lifeEventSelect.appendChild(opt);
-                });
-                injectLifeEventBtn.disabled = false;
-            } catch (e) {
-                lifeEventSelect.innerHTML = '';
-                const opt = document.createElement('option');
-                opt.value = '';
-                opt.textContent = 'Erreur chargement life events';
-                lifeEventSelect.appendChild(opt);
-                injectLifeEventBtn.disabled = true;
-            }
-        }
-
-        async function injectLifeEvent() {
-            const eventType = (lifeEventSelect.value || '').trim();
-            if (!eventType) {
-                addMessage("Choisis d'abord un événement de vie.", 'system', new Date().toISOString());
-                return;
-            }
-            try {
-                const r = await fetch('/autonomy/inject/life-event', {
+                const response = await fetch('/self-improvement/reject', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ event_type: eventType })
+                    body: JSON.stringify({ session_id: sessionId, reason: 'rejected from chat UI' })
                 });
-                const data = await r.json();
-                addMessage(`Life event injecté: ${eventType}`, 'system', new Date().toISOString());
-                if (data && data.result) {
-                    refreshAutonomyStatus();
-                }
+                const data = await response.json();
+                addMessage(data.result || 'Auto-modification rejetée.', 'system', new Date().toISOString());
             } catch (e) {
-                addMessage(`Erreur injection life event: ${e}`, 'error', new Date().toISOString());
+                addMessage(`Erreur rejet: ${e}`, 'error', new Date().toISOString());
             }
         }
 
-        async function stopAutonomy() {
-            try {
-                const r = await fetch('/autonomy/stop', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ reason: 'stopped_from_ui' })
-                });
-                const data = await r.json();
-                setAutonomyStatusText(data.autonomy);
-                addMessage('Autonomie stoppée.', 'system', new Date().toISOString());
-            } catch (e) {
-                addMessage(`Erreur stop autonomie: ${e}`, 'error', new Date().toISOString());
-            }
-        }
+        // NOTE: Le panneau d'autonomie (start/stop + injection intention + life events) a été retiré de l'UI.
 
         // Fonction pour se connecter
         function connect() {
@@ -1991,7 +1869,7 @@
                             : (ev.error || ev.reason || ev.event_type || ev.objective || '');
                         const text = `[AUTONOMIE] ${evType}${step}\n${summary}`.trim();
                         addProcessMessage(text, 'lia_process', data.timestamp);
-                        if (evType === 'autonomy_started' || evType === 'autonomy_stopped' || evType === 'autonomy_completed' || evType === 'autonomy_inject_life_event') {
+                        if (evType === 'autonomy_scheduler_started' || evType === 'autonomy_scheduler_stopped' || evType === 'autonomy_cycle') {
                             refreshAutonomyStatus();
                         }
                         break;
@@ -2113,9 +1991,6 @@
         sendButton.addEventListener('click', sendMessage);
         approveSelfModBtn.addEventListener('click', approvePendingSelfMod);
         rejectSelfModBtn.addEventListener('click', rejectPendingSelfMod);
-        autonomyStartBtn.addEventListener('click', startAutonomy);
-        autonomyStopBtn.addEventListener('click', stopAutonomy);
-        injectLifeEventBtn.addEventListener('click', injectLifeEvent);
         
         chatInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -2127,7 +2002,7 @@
         // Se connecter au chargement
         connect();
         refreshAutonomyStatus();
-        loadLifeEventPresets();
+        setInterval(refreshAutonomyStatus, 5000);
     </script>
 </body>
 </html>

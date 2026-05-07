@@ -264,7 +264,7 @@ async def test_generate_with_planner_autonomy_mode_uses_query_brain():
     adapter._concision_profile_from_planned_actions = lambda *a, **k: "brief"
     adapter._generate_gguf = lambda prompt: "=== IDENTITÉ === ok\nRéponse générée"
     adapter._clean_response = lambda resp, *_a, **_k: resp.replace("===", "").strip()
-    adapter._build_safe_fallback_response = lambda message: f"fallback for {message}"
+    adapter._build_safe_fallback_response = lambda message, **_k: f"fallback for {message}"
 
     out = await adapter._generate_with_planner("Bonjour", session_id="s1")
     assert out
@@ -297,7 +297,7 @@ async def test_generate_with_planner_autonomy_low_confidence_falls_back_to_menu(
     adapter._concision_profile_from_planned_actions = lambda *a, **k: "brief"
     adapter._generate_gguf = lambda prompt: "Réponse"
     adapter._clean_response = lambda resp, *_a, **_k: resp
-    adapter._build_safe_fallback_response = lambda message: f"fallback for {message}"
+    adapter._build_safe_fallback_response = lambda message, **_k: f"fallback for {message}"
 
     class _Planner:
         def _analyze_request(self, message: str):
@@ -363,7 +363,7 @@ async def test_generate_with_planner_autonomy_replans_before_menu_fallback():
     adapter._concision_profile_from_planned_actions = lambda *a, **k: "brief"
     adapter._generate_gguf = lambda prompt: "Réponse"
     adapter._clean_response = lambda resp, *_a, **_k: resp
-    adapter._build_safe_fallback_response = lambda message: f"fallback for {message}"
+    adapter._build_safe_fallback_response = lambda message, **_k: f"fallback for {message}"
 
     class _Planner:
         def __init__(self):
@@ -422,7 +422,7 @@ async def test_generate_with_planner_prompt_rebuild_happens_before_menu_fallback
     adapter._concision_profile_from_planned_actions = lambda *a, **k: "brief"
     adapter._generate_gguf = lambda prompt: "Réponse"
     adapter._clean_response = lambda resp, *_a, **_k: resp
-    adapter._build_safe_fallback_response = lambda message: f"fallback for {message}"
+    adapter._build_safe_fallback_response = lambda message, **_k: f"fallback for {message}"
 
     class _Planner:
         def _analyze_request(self, message: str):
@@ -668,6 +668,69 @@ def test_safe_fallback_response_generic():
 
     text = LLMAdapter._build_safe_fallback_response("Explique moi ce bug")
     assert "reformuler" in text
+
+
+def test_safe_fallback_response_identity_contextual():
+    from core.llm_adapter import LLMAdapter
+
+    text = LLMAdapter._build_safe_fallback_response(
+        "Qui es tu ?",
+        primary_brain="system",
+        actions_sequence="consult_identity -> respond",
+        execution_results={"consult_identity": {"identity": "Je suis LIA test."}},
+    )
+    assert "LIA" in text
+    assert "test" in text
+
+
+def test_safe_fallback_response_identity_describe_form():
+    from core.llm_adapter import LLMAdapter
+
+    text = LLMAdapter._build_safe_fallback_response(
+        "Tu peux te decrire encore plus ?",
+        primary_brain="system",
+        actions_sequence="respond",
+        execution_results={},
+    )
+    assert "lia" in text.lower()
+    assert "agent conversationnel autonome" in text.lower()
+
+
+def test_safe_fallback_response_system_contextual():
+    from core.llm_adapter import LLMAdapter
+
+    text = LLMAdapter._build_safe_fallback_response(
+        "Quel est ton état système ?",
+        primary_brain="system",
+        actions_sequence="consult_environment -> respond",
+        execution_results={"_brain_outputs": {"system": "latence_moyenne=12 ms"}},
+    )
+    assert "état système" in text.lower() or "etat système" in text.lower() or "etat systeme" in text.lower()
+    assert "12" in text
+
+
+def test_safe_fallback_response_memory_contextual():
+    from core.llm_adapter import LLMAdapter
+
+    text = LLMAdapter._build_safe_fallback_response(
+        "Tu te souviens de notre discussion ?",
+        primary_brain="memory",
+        actions_sequence="consult_memory -> respond",
+        execution_results={},
+    )
+    assert "mémoire" in text.lower() or "memoire" in text.lower()
+
+
+def test_safe_fallback_response_code_contextual():
+    from core.llm_adapter import LLMAdapter
+
+    text = LLMAdapter._build_safe_fallback_response(
+        "Aide moi à corriger ce bug",
+        primary_brain="code",
+        actions_sequence="consult_request -> respond",
+        execution_results={},
+    )
+    assert "code" in text.lower()
 
 
 def test_semantic_decision_guidance_identity():

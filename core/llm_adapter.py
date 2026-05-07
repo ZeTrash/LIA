@@ -1155,15 +1155,52 @@ class LLMAdapter:
         cache_dir = self._configure_hf_cache_env()
         logger.info(f"   Cache: {cache_dir}")
 
-        self.model = LLM(
-            model=model_path,
-            dtype=self.config.vllm_dtype,
-            max_model_len=self.config.vllm_max_model_len,
-            gpu_memory_utilization=self.config.vllm_gpu_memory_utilization,
-            trust_remote_code=True,
-            download_dir=cache_dir,
-            hf_overrides={"cache_dir": cache_dir},
-        )
+        def _try_load(max_model_len: int):
+            return LLM(
+                model=model_path,
+                dtype=self.config.vllm_dtype,
+                max_model_len=int(max_model_len),
+                gpu_memory_utilization=self.config.vllm_gpu_memory_utilization,
+                trust_remote_code=True,
+                download_dir=cache_dir,
+                hf_overrides={"cache_dir": cache_dir},
+            )
+
+        requested_len = int(self.config.vllm_max_model_len)
+        candidates = []
+        if requested_len > 0:
+            candidates.append(requested_len)
+        # Valeurs "raisonnables" (vLLM compile range est souvent 16384, et de nombreux GPU
+        # limitent à ~8-14k pour de très gros modèles).
+        candidates += [16384, 14080, 12288, 10240, 8192, 6144, 4096, 3072, 2048]
+        # Unicité + ordre
+        seen = set()
+        candidates = [x for x in candidates if x not in seen and not seen.add(x)]
+
+        last_err: Exception | None = None
+        for max_len in candidates:
+            if max_len <= 0:
+                continue
+            try:
+                if max_len != requested_len:
+                    logger.warning(
+                        "⚠️  vLLM: tentative de chargement avec max_model_len=%s (au lieu de %s).",
+                        max_len,
+                        requested_len,
+                    )
+                self.model = _try_load(max_len)
+                self.config.vllm_max_model_len = int(max_len)
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                msg = str(e)
+                # Ne loguer qu'une partie utile pour éviter de spammer.
+                short = msg.splitlines()[0] if msg else e.__class__.__name__
+                logger.warning("⚠️  vLLM échec (max_model_len=%s): %s", max_len, short)
+
+        if last_err is not None:
+            raise last_err
         self.tokenizer = None
         self.backend_type = "vllm"
 
@@ -2195,6 +2232,25 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                             used_fallback = False
                         except Exception:
                             pass
+                    # Garde-fou: les questions d'identité explicites ne doivent pas être routées "system".
+                    # Exemple observé: "Qui es tu?" classé system par router_model -> réponse générique fallback.
+                    identity_query = bool(
+                        re.search(
+                            r"\b(qui\s+es[-\s]?tu|qui\s+es\s+tu|ton\s+identit[eé]|pr[eé]sente[-\s]?toi|d[eé]cris[-\s]?toi|te\s+d[eé]crire|parle\s+de\s+toi)\b",
+                            str(message or "").lower(),
+                        )
+                    )
+                    if identity_query and getattr(intent.brain, "value", "") == "system":
+                        from .neural_router import BrainType
+
+                        intent = type(intent)(
+                            brain=BrainType.IDENTITY,
+                            sub_tasks=intent.sub_tasks,
+                            priority=max(float(getattr(intent, "priority", 0.5)), 0.7),
+                            multi_brain=True,
+                            required_brains=list({*intent.required_brains, BrainType.IDENTITY}),
+                        )
+                        used_fallback = True
                     dispatch_plan = self.neural_router.dispatch(intent)
                     selected_primary_brain = intent.brain.value
                     execution_results["_neural_router"] = {
@@ -3763,7 +3819,21 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     "⚠️  [LLM_ADAPTER] Réponse vide après génération/nettoyage. "
                     "Activation du fallback de stabilité."
                 )
-                response = self._build_safe_fallback_response(message)
+                response = self._build_safe_fallback_response(
+                    message,
+                    primary_brain=selected_primary_brain,
+                    execution_results=execution_results,
+                    actions_sequence=actions_seq,
+                )
+            # Éviter une sortie trop générique quand on dispose de contexte utile.
+            generic_fallback = "je suis là pour vous aider. pouvez-vous reformuler votre demande en une phrase ?"
+            if (response or "").strip().lower() == generic_fallback:
+                response = self._build_safe_fallback_response(
+                    message,
+                    primary_brain=selected_primary_brain,
+                    execution_results=execution_results,
+                    actions_sequence=actions_seq,
+                )
 
             # IdentityBrain: validation légère de la sortie finale (V2 MVP)
             if self.identity_brain is not None:
@@ -3771,7 +3841,12 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
                     verdict = self.identity_brain.validate_response(response)
                     if not getattr(verdict, "is_valid", True):
                         logger.warning("⚠️  [IDENTITY] Réponse invalide, fallback stabilité. issues=%s", getattr(verdict, "issues", []))
-                        response = self._build_safe_fallback_response(message)
+                        response = self._build_safe_fallback_response(
+                            message,
+                            primary_brain=selected_primary_brain,
+                            execution_results=execution_results,
+                            actions_sequence=actions_seq,
+                        )
                 except Exception:
                     pass
 
@@ -5499,11 +5574,68 @@ INSTRUCTION: Utilise cette information de Gemini pour répondre à l'utilisateur
         return any(n in msg for n in needles)
 
     @staticmethod
-    def _build_safe_fallback_response(user_request: str) -> str:
+    def _build_safe_fallback_response(
+        user_request: str,
+        primary_brain: Optional[str] = None,
+        execution_results: Optional[Dict[str, Any]] = None,
+        actions_sequence: str = "",
+    ) -> str:
         """
         Réponse de secours pour éviter toute sortie vide en production.
+        Version contextuelle: adapte la réponse au brain/action quand possible.
         """
         msg = (user_request or "").strip().lower()
+        brain = (primary_brain or "").strip().lower()
+        exec_res = execution_results or {}
+        actions = (actions_sequence or "").lower()
+
+        identity_like = (
+            any(
+                k in msg
+                for k in (
+                    "qui es-tu",
+                    "qui es tu",
+                    "qui est tu",
+                    "ton identité",
+                    "ton identite",
+                    "présente-toi",
+                    "presente-toi",
+                    "décris-toi",
+                    "decris-toi",
+                    "te décrire",
+                    "te decrire",
+                    "parle de toi",
+                )
+            )
+            or "consult_identity" in actions
+            or "consult_identity" in exec_res
+            or brain == "identity"
+        )
+        if identity_like:
+            ident = None
+            try:
+                ident = (exec_res.get("consult_identity") or {}).get("identity")
+            except Exception:
+                ident = None
+            if ident:
+                return f"Je suis LIA. {str(ident).strip()}"
+            return (
+                "Je suis LIA, un agent conversationnel autonome en évolution. "
+                "Je peux t'aider à analyser, coder, raisonner et explorer des idées."
+            )
+        if brain == "system" or "consult_environment" in actions or "consult_environment" in exec_res:
+            sys_txt = None
+            try:
+                sys_txt = ((exec_res.get("_brain_outputs") or {}).get("system")) or None
+            except Exception:
+                sys_txt = None
+            if sys_txt:
+                return f"Voici l'état système disponible: {str(sys_txt).strip()}"
+            return "Je peux te donner l'état système (santé, environnement, capacités). Dis-moi l'indicateur précis que tu veux."
+        if brain == "memory" or "consult_memory" in actions or "search_memory" in actions:
+            return "Je peux m'appuyer sur la mémoire disponible pour répondre. Précise ce que tu veux retrouver (fait, date, sujet, émotion)."
+        if brain in {"code", "self_improve"}:
+            return "Je peux t'aider sur du code (diagnostic, patch, refactor, test). Donne le fichier concerné ou l'erreur exacte."
         if any(k in msg for k in ("bonjour", "salut", "hello", "bonsoir", "coucou")):
             return "Bonjour ! Comment puis-je vous aider aujourd'hui ?"
         return (

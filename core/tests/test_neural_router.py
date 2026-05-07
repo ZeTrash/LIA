@@ -38,3 +38,10 @@ def test_aggregate_prefers_lang_response():
     )
     assert output == "final answer"
 
+
+def test_classify_identity_describe_form_sets_identity_primary():
+    router = NeuralRouter()
+    intent = router.classify_intent("Tu peux te decrire encore plus ?")
+    assert intent.brain == BrainType.IDENTITY
+    assert BrainType.IDENTITY in intent.required_brains
+

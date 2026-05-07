@@ -72,7 +72,22 @@ class NeuralRouter:
         memory_like = any(
             k in text for k in ("souviens", "souvenir", "rappelle", "mémoire", "memoire", "historique")
         )
-        identity_like = any(k in text for k in ("qui es-tu", "qui es tu", "ton identité", "ton identite"))
+        identity_like = any(
+            k in text
+            for k in (
+                "qui es-tu",
+                "qui es tu",
+                "ton identité",
+                "ton identite",
+                "présente-toi",
+                "presente-toi",
+                "decris-toi",
+                "décris-toi",
+                "te décrire",
+                "te decrire",
+                "parle de toi",
+            )
+        )
         system_like = any(k in text for k in ("latence", "gpu", "vram", "erreur", "health", "monitoring"))
 
         required: List[BrainType] = [BrainType.LANG]
@@ -101,6 +116,8 @@ class NeuralRouter:
             required.append(BrainType.MEMORY)
             sub_tasks.append("memory_retrieval")
         if identity_like:
+            if primary == BrainType.LANG:
+                primary = BrainType.IDENTITY
             required.append(BrainType.IDENTITY)
             sub_tasks.append("identity_alignment")
         if system_like:
